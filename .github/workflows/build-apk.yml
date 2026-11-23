@@ -1,0 +1,51 @@
+name: Build Cast Pro APKs
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Assemble Phone & TV APKs
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+
+      - name: Build Debug APKs
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload Phone APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CastPro-Phone-debug
+          path: app-phone/build/outputs/apk/debug/*.apk
+          retention-days: 14
+
+      - name: Upload TV APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CastPro-TV-debug
+          path: app-tv/build/outputs/apk/debug/*.apk
+          retention-days: 14
