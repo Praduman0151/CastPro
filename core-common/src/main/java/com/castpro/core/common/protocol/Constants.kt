@@ -16,7 +16,7 @@ object Constants {
     
     // Networking
     const val DEFAULT_STREAM_PORT = 8998
-    const val NSD_SERVICE_TYPE = "_castpro._tcp."
+    const val NSD_SERVICE_TYPE = "_castpro._tcp"
     const val NSD_SERVICE_NAME_PREFIX = "CastPro-TV"
     
     // Gaming Mode Defaults

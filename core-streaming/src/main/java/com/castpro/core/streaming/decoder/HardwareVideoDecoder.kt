@@ -24,18 +24,22 @@ class HardwareVideoDecoder(
     private var totalBytesReceived = 0L
 
     fun start() {
-        val format = MediaFormat.createVideoFormat(config.codecMime, config.width, config.height).apply {
-            setInteger(MediaFormat.KEY_PRIORITY, 0)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+        try {
+            val format = MediaFormat.createVideoFormat(config.codecMime, config.width, config.height).apply {
+                setInteger(MediaFormat.KEY_PRIORITY, 0)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+                }
             }
-        }
 
-        val codec = MediaCodec.createDecoderByType(config.codecMime)
-        codec.configure(format, surface, null, 0)
-        codec.start()
-        mediaCodec = codec
-        isRunning.set(true)
+            val codec = MediaCodec.createDecoderByType(config.codecMime)
+            codec.configure(format, surface, null, 0)
+            codec.start()
+            mediaCodec = codec
+            isRunning.set(true)
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to initialize MediaCodec video decoder", e)
+        }
     }
 
     fun decodeFrame(data: ByteArray, offset: Int, length: Int, timestampNano: Long, isGamingMode: Boolean) {

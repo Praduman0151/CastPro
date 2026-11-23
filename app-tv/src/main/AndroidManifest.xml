@@ -19,7 +19,7 @@
         android:icon="@android:drawable/ic_dialog_info"
         android:label="Cast Pro TV"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen">
+        android:theme="@style/Theme.CastPro.TV">
 
         <activity
             android:name=".TvMainActivity"
@@ -27,7 +27,7 @@
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize"
             android:exported="true"
             android:screenOrientation="landscape"
-            android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen">
+            android:theme="@style/Theme.CastPro.TV">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

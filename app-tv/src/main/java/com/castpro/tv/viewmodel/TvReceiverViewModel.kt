@@ -36,12 +36,12 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
 
     private fun detectLocalIp() {
         try {
-            val interfaces = NetworkInterface.getNetworkInterfaces()
+            val interfaces = NetworkInterface.getNetworkInterfaces() ?: return
             while (interfaces.hasMoreElements()) {
-                val iface = interfaces.nextElement()
-                val addresses = iface.inetAddresses
+                val iface = interfaces.nextElement() ?: continue
+                val addresses = iface.inetAddresses ?: continue
                 while (addresses.hasMoreElements()) {
-                    val addr = addresses.nextElement()
+                    val addr = addresses.nextElement() ?: continue
                     if (!addr.isLoopbackAddress && addr is Inet4Address) {
                         _uiState.update { it.copy(localIpAddress = addr.hostAddress ?: "Unknown") }
                         return
