@@ -13,9 +13,14 @@ import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 
+fun interface StreamPacketListener {
+    fun onPacket(header: PacketHeader, payload: ByteArray)
+}
+
 class HardwareScreenEncoder(
     private val config: StreamConfig,
-    private val outputStream: OutputStream
+    private val outputStream: OutputStream? = null,
+    private val packetListener: StreamPacketListener? = null
 ) {
     private val tag = "HardwareScreenEncoder"
     private var mediaCodec: MediaCodec? = null
@@ -87,18 +92,23 @@ class HardwareScreenEncoder(
                         )
                         header.writeTo(headerBuffer)
 
-                        synchronized(outputStream) {
-                            try {
-                                outputStream.write(headerBuffer.array(), 0, PacketHeader.HEADER_SIZE)
-                                val payload = ByteArray(bufferInfo.size)
-                                encodedData.get(payload)
-                                outputStream.write(payload)
-                                outputStream.flush()
-                            } catch (e: Exception) {
-                                Log.e(tag, "Network send error", e)
-                                isRunning.set(false)
+                        val payload = ByteArray(bufferInfo.size)
+                        encodedData.get(payload)
+
+                        outputStream?.let { stream ->
+                            synchronized(stream) {
+                                try {
+                                    stream.write(headerBuffer.array(), 0, PacketHeader.HEADER_SIZE)
+                                    stream.write(payload)
+                                    stream.flush()
+                                } catch (e: Exception) {
+                                    Log.e(tag, "Network send error", e)
+                                    isRunning.set(false)
+                                }
                             }
                         }
+
+                        packetListener?.onPacket(header, payload)
                     }
                     codec.releaseOutputBuffer(outputIndex, false)
                 }

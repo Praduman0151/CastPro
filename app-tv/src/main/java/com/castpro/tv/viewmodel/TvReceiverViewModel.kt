@@ -1,10 +1,12 @@
 package com.castpro.tv.viewmodel
 
 import android.app.Application
+import android.graphics.Bitmap
 import androidx.lifecycle.AndroidViewModel
 import com.castpro.core.common.model.LatencyMetrics
 import com.castpro.core.common.protocol.Constants
 import com.castpro.core.streaming.discovery.NsdHelper
+import com.castpro.core.streaming.qr.QrCodeGenerator
 import com.castpro.core.streaming.transport.LowLatencySocketServer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -18,6 +20,7 @@ data class TvUiState(
     val clientIp: String? = null,
     val localIpAddress: String = "Detecting...",
     val serviceName: String = "",
+    val qrCodeBitmap: Bitmap? = null,
     val metrics: LatencyMetrics = LatencyMetrics(),
     val showHudOverlay: Boolean = true
 )
@@ -43,7 +46,9 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
                 while (addresses.hasMoreElements()) {
                     val addr = addresses.nextElement() ?: continue
                     if (!addr.isLoopbackAddress && addr is Inet4Address) {
-                        _uiState.update { it.copy(localIpAddress = addr.hostAddress ?: "Unknown") }
+                        val ip = addr.hostAddress ?: "Unknown"
+                        val qr = QrCodeGenerator.generateQrBitmap("castpro://connect?host=$ip&port=${Constants.DEFAULT_STREAM_PORT}", size = 300)
+                        _uiState.update { it.copy(localIpAddress = ip, qrCodeBitmap = qr) }
                         return
                     }
                 }
@@ -59,12 +64,14 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
 
     fun startServer(
         onFrameReceived: (ByteArray, Int, Int, Long, Boolean) -> Unit,
-        onAudioReceived: (ByteArray, Int, Int) -> Unit = { _, _, _ -> }
+        onAudioReceived: (ByteArray, Int, Int) -> Unit = { _, _, _ -> },
+        onGeometryReceived: (com.castpro.core.common.model.GeometryPacket) -> Unit = {}
     ) {
         val server = LowLatencySocketServer(
             port = Constants.DEFAULT_STREAM_PORT,
             onFrameReceived = onFrameReceived,
             onAudioReceived = onAudioReceived,
+            onGeometryReceived = onGeometryReceived,
             onClientConnected = { ip ->
                 _uiState.update { it.copy(isStreaming = true, clientIp = ip) }
             },

@@ -13,6 +13,7 @@ class LowLatencySocketServer(
     private val port: Int = Constants.DEFAULT_STREAM_PORT,
     private val onFrameReceived: (ByteArray, Int, Int, Long, Boolean) -> Unit,
     private val onAudioReceived: (ByteArray, Int, Int) -> Unit = { _, _, _ -> },
+    private val onGeometryReceived: (com.castpro.core.common.model.GeometryPacket) -> Unit = {},
     private val onClientConnected: (String) -> Unit,
     private val onClientDisconnected: () -> Unit
 ) {
@@ -71,6 +72,11 @@ class LowLatencySocketServer(
                 onFrameReceived(payload, 0, header.payloadLength, header.timestampNano, isGamingMode)
             } else if (header.type == Constants.TYPE_AUDIO_DATA) {
                 onAudioReceived(payload, 0, header.payloadLength)
+            } else if (header.type == Constants.TYPE_GEOMETRY) {
+                val geom = com.castpro.core.common.model.GeometryPacket.fromByteArray(payload)
+                if (geom != null) {
+                    onGeometryReceived(geom)
+                }
             }
         }
     }

@@ -1,0 +1,150 @@
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    user-select: none;
+}
+
+body, html {
+    width: 100vw;
+    height: 100vh;
+    background-color: #070B11;
+    color: #FFFFFF;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    overflow: hidden;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+#container {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: #000000;
+}
+
+#remoteVideo {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    transition: width 0.2s ease, height 0.2s ease;
+}
+
+.hud-card {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    background: rgba(13, 17, 23, 0.85);
+    border: 1px solid rgba(0, 229, 255, 0.4);
+    box-shadow: 0 4px 20px rgba(0, 229, 255, 0.15);
+    backdrop-filter: blur(12px);
+    border-radius: 12px;
+    padding: 10px 16px;
+    display: flex;
+    gap: 20px;
+    z-index: 100;
+}
+
+.hud-item {
+    display: flex;
+    flex-direction: column;
+}
+
+.hud-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: #8B949E;
+    letter-spacing: 1px;
+}
+
+.hud-val {
+    font-size: 16px;
+    font-weight: 800;
+    font-family: monospace;
+}
+
+.hud-val.green { color: #00E676; }
+.hud-val.cyan { color: #00E5FF; }
+
+.controls-overlay {
+    position: absolute;
+    bottom: 24px;
+    display: flex;
+    gap: 16px;
+    z-index: 100;
+    opacity: 0.85;
+    transition: opacity 0.3s;
+}
+
+.controls-overlay:hover {
+    opacity: 1;
+}
+
+.glow-btn {
+    background: linear-gradient(135deg, #00E5FF, #0088FF);
+    color: #000000;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-weight: 700;
+    font-size: 14px;
+    cursor: pointer;
+    box-shadow: 0 0 15px rgba(0, 229, 255, 0.4);
+    transition: transform 0.1s, box-shadow 0.2s;
+}
+
+.glow-btn.secondary {
+    background: rgba(22, 27, 34, 0.85);
+    color: #FFFFFF;
+    border: 1px solid #30363D;
+    box-shadow: none;
+}
+
+.glow-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.6);
+}
+
+#loadingOverlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: radial-gradient(circle at center, #111824 0%, #070B11 100%);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 20px;
+    z-index: 200;
+}
+
+.spinner {
+    width: 64px;
+    height: 64px;
+    border: 4px solid rgba(0, 229, 255, 0.15);
+    border-top: 4px solid #00E5FF;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+.neon-text {
+    color: #00E5FF;
+    letter-spacing: 2px;
+    font-size: 24px;
+}
+
+.subtitle {
+    color: #8B949E;
+    font-size: 14px;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Cast Pro — Low-Latency Web Receiver</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="container">
+        <video id="remoteVideo" autoplay playsinline muted></video>
+        <audio id="remoteAudio" autoplay></audio>
+
+        <!-- Gamer HUD Overlay -->
+        <div id="gamerHud" class="hud-card">
+            <div class="hud-item">
+                <span class="hud-label">LATENCY</span>
+                <span id="hudLatency" class="hud-val green">-- ms</span>
+            </div>
+            <div class="hud-item">
+                <span class="hud-label">FPS</span>
+                <span id="hudFps" class="hud-val cyan">--</span>
+            </div>
+            <div class="hud-item">
+                <span class="hud-label">STATUS</span>
+                <span id="hudStatus" class="hud-val green">CONNECTED</span>
+            </div>
+        </div>
+
+        <!-- Controls Bar -->
+        <div id="controlsBar" class="controls-overlay">
+            <button id="btnPlay" class="glow-btn">▶ Enable Audio</button>
+            <button id="btnFullscreen" class="glow-btn secondary">⛶ Fullscreen</button>
+        </div>
+
+        <!-- Loading Overlay -->
+        <div id="loadingOverlay">
+            <div class="spinner"></div>
+            <h2 class="neon-text">CAST PRO WEB RECEIVER</h2>
+            <p class="subtitle">Waiting for game stream from phone...</p>
+        </div>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>

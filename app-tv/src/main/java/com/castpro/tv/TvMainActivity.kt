@@ -32,6 +32,9 @@ class TvMainActivity : ComponentActivity() {
             },
             onAudioReceived = { data, offset, length ->
                 player.playAudioChunk(data, offset, length)
+            },
+            onGeometryReceived = { geometry ->
+                surfaceRenderer?.onGeometry(geometry)
             }
         )
 

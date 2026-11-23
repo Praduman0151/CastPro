@@ -9,6 +9,7 @@ object Constants {
     const val TYPE_AUDIO_DATA: Byte = 0x02
     const val TYPE_HEARTBEAT: Byte = 0x03
     const val TYPE_HANDSHAKE: Byte = 0x04
+    const val TYPE_GEOMETRY: Byte = 0x05
     
     // Flags
     const val FLAG_KEYFRAME: Byte = 0x01
@@ -16,6 +17,8 @@ object Constants {
     
     // Networking
     const val DEFAULT_STREAM_PORT = 8998
+    const val DEFAULT_WEB_PORT = 8080
+    const val DEFAULT_WS_PORT = 8081
     const val NSD_SERVICE_TYPE = "_castpro._tcp"
     const val NSD_SERVICE_NAME_PREFIX = "CastPro-TV"
     

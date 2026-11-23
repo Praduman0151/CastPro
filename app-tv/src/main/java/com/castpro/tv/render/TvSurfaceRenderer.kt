@@ -39,6 +39,10 @@ class TvSurfaceRenderer(
         decoder?.decodeFrame(data, offset, length, timestampNano, isGamingMode)
     }
 
+    fun onGeometry(geometry: com.castpro.core.common.model.GeometryPacket) {
+        decoder?.updateGeometry(geometry)
+    }
+
     fun release() {
         decoder?.stop()
         decoder = null

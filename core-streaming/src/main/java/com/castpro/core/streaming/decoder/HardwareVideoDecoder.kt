@@ -42,6 +42,10 @@ class HardwareVideoDecoder(
         }
     }
 
+    fun updateGeometry(geometry: com.castpro.core.common.model.GeometryPacket) {
+        Log.i(tag, "Decoder received dynamic geometry: ${geometry.width}x${geometry.height}, ratio=${geometry.aspectRatio}")
+    }
+
     fun decodeFrame(data: ByteArray, offset: Int, length: Int, timestampNano: Long, isGamingMode: Boolean) {
         val codec = mediaCodec ?: return
         if (!isRunning.get()) return

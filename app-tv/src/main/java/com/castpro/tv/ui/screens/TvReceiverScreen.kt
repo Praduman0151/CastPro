@@ -2,6 +2,7 @@ package com.castpro.tv.ui.screens
 
 import android.view.SurfaceView
 import android.view.ViewGroup
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -17,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -88,6 +90,22 @@ fun TvReceiverScreen(
                     )
 
                     Spacer(modifier = Modifier.height(8.dp))
+
+                    if (state.qrCodeBitmap != null) {
+                        Image(
+                            bitmap = state.qrCodeBitmap.asImageBitmap(),
+                            contentDescription = "Scan with Cast Pro Phone to Pair",
+                            modifier = Modifier
+                                .size(180.dp)
+                                .background(Color.White, RoundedCornerShape(12.dp))
+                                .padding(8.dp)
+                        )
+                        Text(
+                            text = "Scan QR code with Cast Pro Phone app",
+                            color = Color.LightGray,
+                            fontSize = 14.sp
+                        )
+                    }
 
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(16.dp),

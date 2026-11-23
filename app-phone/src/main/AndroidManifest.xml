@@ -9,6 +9,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.CAMERA" />
 
     <application
         android:allowBackup="true"
@@ -33,6 +35,11 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+
+        <service
+            android:name=".service.InGameOverlayService"
+            android:enabled="true"
+            android:exported="false" />
 
     </application>
 
