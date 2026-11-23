@@ -34,7 +34,9 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build Debug APKs
-        run: ./gradlew assembleDebug --stacktrace
+        run: ./gradlew assembleDebug --stacktrace --no-daemon
+        env:
+          GRADLE_OPTS: "-Xmx4096m -XX:MaxMetaspaceSize=1024m -XX:+UseG1GC"
 
       - name: Upload Phone APK
         uses: actions/upload-artifact@v4
