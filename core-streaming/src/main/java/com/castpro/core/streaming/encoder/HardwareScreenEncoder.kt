@@ -73,8 +73,9 @@ class HardwareScreenEncoder(
                         encodedData.limit(bufferInfo.offset + bufferInfo.size)
 
                         val isKeyframe = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
-                        val flags = (if (isKeyframe) Constants.FLAG_KEYFRAME else 0).toByte() or
-                                    (if (config.isGamingMode) Constants.FLAG_GAMING_MODE else 0).toByte()
+                        val keyframeFlag = if (isKeyframe) Constants.FLAG_KEYFRAME.toInt() else 0
+                        val gamingFlag = if (config.isGamingMode) Constants.FLAG_GAMING_MODE.toInt() else 0
+                        val flags = (keyframeFlag or gamingFlag).toByte()
 
                         headerBuffer.clear()
                         val header = PacketHeader(
