@@ -13,6 +13,7 @@ import com.castpro.core.streaming.network.LocalNetwork
 import com.castpro.core.streaming.qr.QrCodeGenerator
 import com.castpro.phone.SettingsStore
 import com.castpro.phone.service.ScreenCaptureService
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
