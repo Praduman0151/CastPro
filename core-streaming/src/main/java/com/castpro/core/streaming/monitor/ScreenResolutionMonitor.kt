@@ -1,11 +1,10 @@
 package com.castpro.core.streaming.monitor
 
 import android.content.Context
-import android.content.res.Configuration
-import android.graphics.Point
+import android.hardware.display.DisplayManager
 import android.os.Build
-import android.util.DisplayMetrics
 import android.util.Log
+import android.view.Display
 import android.view.OrientationEventListener
 import android.view.Surface
 import android.view.WindowManager
@@ -66,22 +65,37 @@ class ScreenResolutionMonitor(
 
     @Suppress("DEPRECATION")
     private fun getCurrentScreenMetrics(): Triple<Int, Int, Int> {
-        val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            context.display ?: windowManager.defaultDisplay
-        } else {
-            windowManager.defaultDisplay
-        }
+        // Context.getDisplay() throws UnsupportedOperationException on Android 16+
+        // when the Context is not attached to a window (e.g. a background
+        // Service). Query the default display through DisplayManager, which is
+        // safe from any Context, and fall back to resource metrics if a window
+        // query misbehaves. This monitor runs on the main thread from the
+        // orientation listener, so it must never throw.
+        val displayManager = context.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
+        val display = runCatching { displayManager?.getDisplay(Display.DEFAULT_DISPLAY) }.getOrNull()
+            ?: runCatching { windowManager.defaultDisplay }.getOrNull()
+        val rotation = runCatching { display?.rotation }.getOrNull() ?: Surface.ROTATION_0
 
-        val rotation = display?.rotation ?: Surface.ROTATION_0
-
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val windowMetrics = windowManager.currentWindowMetrics
-            val bounds = windowMetrics.bounds
-            Triple(bounds.width(), bounds.height(), rotation)
-        } else {
-            val point = Point()
-            display?.getRealSize(point)
-            Triple(point.x, point.y, rotation)
+        var width = 0
+        var height = 0
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                windowManager.currentWindowMetrics.bounds.let { bounds ->
+                    width = bounds.width()
+                    height = bounds.height()
+                }
+            } else {
+                val metrics = android.util.DisplayMetrics()
+                display?.getRealMetrics(metrics)
+                width = metrics.widthPixels
+                height = metrics.heightPixels
+            }
         }
+        if (width <= 0 || height <= 0) {
+            val fallback = context.resources.displayMetrics
+            width = fallback.widthPixels
+            height = fallback.heightPixels
+        }
+        return Triple(width.coerceAtLeast(1), height.coerceAtLeast(1), rotation)
     }
 }
