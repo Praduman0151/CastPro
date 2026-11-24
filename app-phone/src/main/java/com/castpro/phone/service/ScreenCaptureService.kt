@@ -521,7 +521,8 @@ class ScreenCaptureService : Service() {
         }
     }
 
-    private fun sendHeartbeat(target: StreamTransport = transport ?: return) {
+    private fun sendHeartbeat(target: StreamTransport? = transport) {
+        val active = target ?: return
         val header = PacketHeader(
             type = Constants.TYPE_HEARTBEAT,
             flags = 0,
@@ -529,7 +530,7 @@ class ScreenCaptureService : Service() {
             timestampNano = System.currentTimeMillis() * 1_000_000L,
             payloadLength = 0
         )
-        target.send(header, ByteArray(0))
+        active.send(header, ByteArray(0))
     }
 
     private fun sendStreamConfig() {
