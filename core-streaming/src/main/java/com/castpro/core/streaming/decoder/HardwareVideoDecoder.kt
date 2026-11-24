@@ -129,6 +129,7 @@ class HardwareVideoDecoder(
                     "Decoder started: ${preferredName ?: "hardware"} " +
                         "${config.codecMime} ${width}x${height}"
                 )
+                onError("")
                 return
             } catch (e: Exception) {
                 lastError = e

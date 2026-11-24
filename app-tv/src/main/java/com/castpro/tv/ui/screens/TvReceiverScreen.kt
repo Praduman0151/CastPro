@@ -272,6 +272,7 @@ fun TvReceiverScreen(
                     onCycleColorFilter = onCycleColorFilter,
                     onToggleSettings = onToggleSettings,
                     settingsVisible = state.showSettingsPanel,
+                    error = state.connectionError,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(24.dp)

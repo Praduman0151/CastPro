@@ -31,6 +31,7 @@ fun TvGamerHudOverlay(
     onCycleColorFilter: () -> Unit = {},
     onToggleSettings: () -> Unit = {},
     settingsVisible: Boolean = false,
+    error: String? = null,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -116,6 +117,14 @@ fun TvGamerHudOverlay(
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.clickable { onToggleSettings() }
+            )
+        }
+        error?.takeIf { it.isNotBlank() }?.let { message ->
+            Text(
+                text = message,
+                color = Color(0xFFFF8A80),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium
             )
         }
     }
