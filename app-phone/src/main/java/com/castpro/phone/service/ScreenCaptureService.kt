@@ -91,6 +91,7 @@ class ScreenCaptureService : Service() {
 
     companion object {
         const val ACTION_START = "com.castpro.phone.action.START"
+        const val ACTION_UPDATE_CONFIG = "com.castpro.phone.action.UPDATE_CONFIG"
         const val ACTION_STOP = "com.castpro.phone.action.STOP"
         const val ACTION_TOGGLE_MUTE = "com.castpro.phone.action.TOGGLE_MUTE"
 
@@ -179,6 +180,20 @@ class ScreenCaptureService : Service() {
                     enableWakeLock = intent.getBooleanExtra(EXTRA_ENABLE_WAKE_LOCK, true)
                 )
             }
+            ACTION_UPDATE_CONFIG -> {
+                // Apply quality changes to the live session. Recreating the
+                // projection would require the consent dialog again, so keep
+                // MediaProjection and only swap the virtual display + encoder.
+                applyLiveConfig(
+                    width = intent.getIntExtra(EXTRA_WIDTH, 1920),
+                    height = intent.getIntExtra(EXTRA_HEIGHT, 1080),
+                    dpi = intent.getIntExtra(EXTRA_DPI, 320),
+                    bitrate = intent.getIntExtra(EXTRA_BITRATE, 15_000_000),
+                    fps = intent.getIntExtra(EXTRA_FPS, 60),
+                    codec = intent.getStringExtra(EXTRA_CODEC) ?: "video/avc",
+                    isGamingMode = intent.getBooleanExtra(EXTRA_GAMING_MODE, true)
+                )
+            }
             ACTION_STOP -> stopStreaming()
             ACTION_TOGGLE_MUTE -> {
                 audioMuted = !audioMuted
@@ -191,6 +206,100 @@ class ScreenCaptureService : Service() {
             }
         }
         return START_NOT_STICKY
+    }
+
+    /**
+     * Reconfigure an active cast when the user changes resolution, FPS, codec
+     * or bitrate. The MediaProjection token stays alive, so no permission
+     * dialog is needed; only the input surface and encoder are replaced.
+     */
+    private fun applyLiveConfig(
+        width: Int,
+        height: Int,
+        dpi: Int,
+        bitrate: Int,
+        fps: Int,
+        codec: String,
+        isGamingMode: Boolean
+    ) {
+        if (!started.get()) return
+        serviceScope.launch {
+            val project = mediaProjection ?: return@launch
+            val tcp = transport ?: return@launch
+            if (!transportConnected) return@launch
+            val next = StreamConfig(
+                width = width,
+                height = height,
+                dpi = dpi,
+                fps = fps,
+                bitrate = bitrate,
+                port = currentConfig?.port ?: Constants.DEFAULT_STREAM_PORT,
+                isGamingMode = isGamingMode,
+                codecMime = codec
+            )
+            if (currentConfig == next) return@launch
+            appendStatus("applyLiveConfig ${width}x$height@${fps}fps ${bitrate / 1_000_000}M $codec")
+            Log.i(tag, "Applying live quality: ${next.width}x${next.height}@${next.fps} $codec")
+            try {
+                // Stop the old pipeline before touching the config packet.
+                encoder?.stop()
+                encoder = null
+                virtualDisplay?.release()
+                virtualDisplay = null
+
+                currentConfig = next
+                currentStreamConfigPacket = StreamConfigPacket(
+                    codec = com.castpro.core.common.model.VideoCodec.fromMime(codec),
+                    width = width,
+                    height = height,
+                    fps = fps,
+                    bitrate = bitrate,
+                    isGamingMode = isGamingMode
+                )
+                // The TV reconfigures its decoder on this packet, so send it
+                // before the first frame of the new pipeline.
+                sendStreamConfig()
+
+                val enc = HardwareScreenEncoder(
+                    config = next,
+                    transport = tcp,
+                    onStats = { stats ->
+                        CastSessionBus.updateStats(
+                            fps = stats.fps,
+                            bitrateMbps = stats.bitrateMbps,
+                            framesSent = stats.framesSent,
+                            bytesSent = stats.bytesSent,
+                            droppedFrames = stats.droppedFrames
+                        )
+                    },
+                    onError = { message -> CastSessionBus.setError(message) }
+                )
+                val inputSurface = enc.prepare()
+                enc.start()
+                encoder = enc
+                virtualDisplay = project.createVirtualDisplay(
+                    "CastPro-Display",
+                    width,
+                    height,
+                    dpi,
+                    DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                    inputSurface,
+                    null,
+                    null
+                )
+                if (virtualDisplay == null) {
+                    throw IllegalStateException("Could not resize the capture display")
+                }
+                sendHeartbeat(tcp)
+                enc.requestKeyFrame()
+                updateNotification("Streaming ${width}×${height} @ ${fps}FPS • quality updated")
+                appendStatus("applyLiveConfig done")
+            } catch (e: Exception) {
+                Log.e(tag, "Could not apply live quality change", e)
+                CastSessionBus.setError("Could not apply quality: ${e.message ?: "encoder error"}")
+                appendStatus("applyLiveConfig failed: ${e.message}")
+            }
+        }
     }
 
     private fun startStreamingWithProjection(

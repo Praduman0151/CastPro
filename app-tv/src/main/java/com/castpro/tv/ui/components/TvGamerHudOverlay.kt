@@ -29,6 +29,8 @@ fun TvGamerHudOverlay(
     colorFilter: TvColorFilter,
     onCycleDisplayMode: () -> Unit = {},
     onCycleColorFilter: () -> Unit = {},
+    onToggleSettings: () -> Unit = {},
+    settingsVisible: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -108,6 +110,13 @@ fun TvGamerHudOverlay(
                     fontSize = 10.sp
                 )
             }
+            Text(
+                text = if (settingsVisible) "SETTINGS ✕" else "SETTINGS ⚙",
+                color = TvNeonGreen,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.clickable { onToggleSettings() }
+            )
         }
     }
 }

@@ -40,12 +40,13 @@ fun TvReceiverScreen(
     onDisplayModeChanged: (TvDisplayMode) -> Unit = {},
     onColorFilterChanged: (TvColorFilter) -> Unit = {},
     onCycleDisplayMode: () -> Unit = {},
-    onCycleColorFilter: () -> Unit = {}
+    onCycleColorFilter: () -> Unit = {},
+    onToggleSettings: () -> Unit = {}
 ) {
     val tvAspect = 16f / 9f
-    val streamAspect = state.streamConfig.let { cfg ->
-        if (cfg.height > 0) cfg.width.toFloat() / cfg.height else tvAspect
-    }.coerceIn(0.4f, 3f)
+    // Use the real phone-screen aspect from rotation updates. The encoded
+    // resolution is a target, not the actual shape of a landscape game.
+    val streamAspect = state.aspectRatio.coerceIn(0.4f, 3f)
 
     // Keep the decoder surface inside the panel for Fit, but let Full/Stretch/
     // Zoom use the whole window. Never derive this from phone sensor geometry.
@@ -261,18 +262,133 @@ fun TvReceiverScreen(
                     }
                 }
             }
-        } else if (state.showHudOverlay) {
-            TvGamerHudOverlay(
-                metrics = state.metrics,
-                displayMode = state.displayMode,
-                colorFilter = state.colorFilter,
-                onCycleDisplayMode = onCycleDisplayMode,
-                onCycleColorFilter = onCycleColorFilter,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(24.dp)
-            )
+        } else {
+            if (state.showHudOverlay) {
+                TvGamerHudOverlay(
+                    metrics = state.metrics,
+                    displayMode = state.displayMode,
+                    colorFilter = state.colorFilter,
+                    onCycleDisplayMode = onCycleDisplayMode,
+                    onCycleColorFilter = onCycleColorFilter,
+                    onToggleSettings = onToggleSettings,
+                    settingsVisible = state.showSettingsPanel,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(24.dp)
+                )
+            }
+            if (state.showSettingsPanel) {
+                TvCastSettingsPanel(
+                    state = state,
+                    onDisplayModeChanged = onDisplayModeChanged,
+                    onColorFilterChanged = onColorFilterChanged,
+                    onClose = onToggleSettings,
+                    modifier = Modifier.align(Alignment.Center)
+                )
+            }
         }
+    }
+}
+
+@Composable
+private fun TvCastSettingsPanel(
+    state: TvUiState,
+    onDisplayModeChanged: (TvDisplayMode) -> Unit,
+    onColorFilterChanged: (TvColorFilter) -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .background(Color(0xE60B1018), RoundedCornerShape(18.dp))
+            .border(2.dp, TvNeonGreen.copy(alpha = 0.5f), RoundedCornerShape(18.dp))
+            .padding(horizontal = 32.dp, vertical = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = "CAST SETTINGS",
+                color = Color.White,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Box(
+                modifier = Modifier
+                    .background(Color(0xFF202830), RoundedCornerShape(8.dp))
+                    .clickable { onClose() }
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
+            ) {
+                Text(text = "CLOSE", color = TvNeonGreen, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        Text(
+            text = "DISPLAY MODE  ·  ${state.displayMode.label}: ${state.displayMode.description}",
+            color = TvNeonBlue,
+            fontSize = 13.sp
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TvDisplayMode.values().forEach { mode ->
+                TvChip(
+                    label = mode.label,
+                    selected = state.displayMode == mode,
+                    onClick = { onDisplayModeChanged(mode) }
+                )
+            }
+        }
+
+        Text(text = "COLOR FILTER", color = TvNeonBlue, fontSize = 13.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TvColorFilter.values().take(5).forEach { filter ->
+                TvChip(
+                    label = filter.label,
+                    selected = state.colorFilter == filter,
+                    onClick = { onColorFilterChanged(filter) }
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TvColorFilter.values().drop(5).forEach { filter ->
+                TvChip(
+                    label = filter.label,
+                    selected = state.colorFilter == filter,
+                    onClick = { onColorFilterChanged(filter) }
+                )
+            }
+        }
+
+        Text(
+            text = "STREAM QUALITY",
+            color = TvNeonBlue,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            text = buildString {
+                append(state.metrics.resolutionLabel.ifBlank { "—" })
+                append("  ·  ")
+                append(state.metrics.codecLabel.ifBlank { "Video" })
+                append("  ·  ")
+                append("${state.metrics.currentFps} FPS")
+                append("  ·  ")
+                append("${String.format("%.1f", state.metrics.bitrateMbps)} Mb/s")
+                if (state.metrics.targetBitrateMbps > 0f) {
+                    append("  ·  target ${String.format("%.0f", state.metrics.targetBitrateMbps)}M")
+                }
+            },
+            color = Color.LightGray,
+            fontSize = 13.sp
+        )
+        Text(
+            text = "Phone shape ${String.format("%.2f", state.aspectRatio)}:1 · " +
+                "Full crops the edges, Fit keeps black bars, Stretch forces 16:9.",
+            color = Color.Gray,
+            fontSize = 11.sp
+        )
     }
 }
 

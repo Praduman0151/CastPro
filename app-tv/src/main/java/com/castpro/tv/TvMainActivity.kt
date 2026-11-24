@@ -6,6 +6,7 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -36,6 +37,11 @@ class TvMainActivity : ComponentActivity() {
 
         setContent {
             val state by viewModel.uiState.collectAsState()
+            // Apply display-mode changes to the live decoder without restarting
+            // the stream. Cropping/fit is a MediaCodec surface transform.
+            LaunchedEffect(state.displayMode) {
+                surfaceRenderer?.setVideoScalingMode(state.displayMode.scalingMode)
+            }
             TvReceiverScreen(
                 state = state,
                 onDismissCrash = { viewModel.dismissCrashReport() },
@@ -43,10 +49,12 @@ class TvMainActivity : ComponentActivity() {
                 onColorFilterChanged = { filter -> viewModel.setColorFilter(filter) },
                 onCycleDisplayMode = { viewModel.cycleDisplayMode() },
                 onCycleColorFilter = { viewModel.cycleColorFilter() },
+                onToggleSettings = { viewModel.toggleSettingsPanel() },
                 onSurfaceCreated = { surfaceView ->
                     val renderer = TvSurfaceRenderer(
                         surfaceView = surfaceView,
                         initialConfig = viewModel.uiState.value.streamConfig,
+                        initialScalingMode = viewModel.uiState.value.displayMode.scalingMode,
                         onMetricsUpdated = { metrics ->
                             runOnUiThread { viewModel.updateMetrics(metrics) }
                         },
@@ -89,9 +97,10 @@ class TvMainActivity : ComponentActivity() {
                                 player.playAudioChunk(data, offset, length)
                             },
                             onGeometryReceived = { geometry ->
-                                // Rotation metadata only. Never resize the
-                                // surface from it: the encoded stream decides
-                                // the display geometry, not the phone sensor.
+                                // Rotation metadata only. The real phone aspect
+                                // is used by Stretch mode; the decoder surface
+                                // itself is never resized from sensor data.
+                                viewModel.updateAspectRatio(geometry.aspectRatio)
                                 surfaceRenderer?.onGeometry(geometry)
                             }
                         )
@@ -103,7 +112,11 @@ class TvMainActivity : ComponentActivity() {
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_BUTTON_A) {
-            viewModel.toggleHudOverlay()
+            if (viewModel.uiState.value.showSettingsPanel) {
+                viewModel.toggleSettingsPanel()
+            } else {
+                viewModel.toggleHudOverlay()
+            }
             return true
         }
         return super.onKeyDown(keyCode, event)

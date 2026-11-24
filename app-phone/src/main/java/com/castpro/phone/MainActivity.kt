@@ -331,6 +331,7 @@ class MainActivity : ComponentActivity() {
         } else {
             startService(serviceIntent)
         }
+        viewModel.setActiveQuality(state.settings)
         viewModel.setStatus(StreamStatus.CONNECTING)
     }
 

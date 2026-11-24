@@ -19,6 +19,7 @@ import kotlin.math.ceil
 class HardwareVideoDecoder(
     initialConfig: StreamConfig,
     private val surface: Surface,
+    initialScalingMode: Int = MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING,
     private val onMetricsUpdated: (LatencyMetrics) -> Unit,
     private val onError: (String) -> Unit = {},
     private val clockOffsetProvider: () -> Long = { 0L }
@@ -37,9 +38,26 @@ class HardwareVideoDecoder(
     @Volatile private var decodedWidth: Int = config.width
     @Volatile private var decodedHeight: Int = config.height
     @Volatile private var decodedCodecLabel: String = codecDisplayName(config.codecMime)
+    @Volatile private var videoScalingMode: Int = initialScalingMode
 
     fun start() {
         synchronized(lock) { startCodec() }
+    }
+
+    /** Called by the TV when the user changes display mode during a cast. */
+    fun setVideoScalingMode(mode: Int) {
+        if (videoScalingMode == mode) return
+        videoScalingMode = mode
+        synchronized(lock) {
+            val codec = mediaCodec ?: return
+            val applied = runCatching { codec.setVideoScalingMode(mode) }.isSuccess
+            if (!applied) {
+                // A few TV codecs only accept this before start(). Recreate
+                // the decoder in that case; the phone will resend a keyframe.
+                stopCodec()
+                startCodec()
+            }
+        }
     }
 
     fun reconfigure(newConfig: StreamConfig) {
@@ -101,6 +119,7 @@ class HardwareVideoDecoder(
                     }
                 }
                 codec.configure(format, surface, null, 0)
+                runCatching { codec.setVideoScalingMode(videoScalingMode) }
                 codec.start()
                 mediaCodec = codec
                 waitingForKeyframe = true

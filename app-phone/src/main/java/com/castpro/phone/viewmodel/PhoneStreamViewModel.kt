@@ -1,6 +1,7 @@
 package com.castpro.phone.viewmodel
 
 import android.app.Application
+import android.content.Intent
 import android.graphics.Bitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -11,6 +12,7 @@ import com.castpro.core.streaming.discovery.UdpDiscoveryClient
 import com.castpro.core.streaming.network.LocalNetwork
 import com.castpro.core.streaming.qr.QrCodeGenerator
 import com.castpro.phone.SettingsStore
+import com.castpro.phone.service.ScreenCaptureService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -38,6 +40,8 @@ data class PhoneUiState(
     val webQrBitmap: Bitmap? = null,
     val errorMessage: String? = null,
     val metrics: LatencyMetrics = LatencyMetrics(),
+    /** Quality actually handed to the encoder, not just the saved setting. */
+    val activeQualityLabel: String = "",
     val sessionStats: CastingSessionStats = CastingSessionStats(),
     val activeNavTab: Int = 0,
     val isReceiverConnected: Boolean = false,
@@ -48,6 +52,7 @@ data class PhoneUiState(
 class PhoneStreamViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application
     private val settingsStore = SettingsStore(application)
+    private var qualityApplyJob: Job? = null
     private val nsdHelper = NsdHelper(application)
     private val udpDiscovery = UdpDiscoveryClient(
         onReceiverFound = ::mergeReceiver,
@@ -207,7 +212,53 @@ class PhoneStreamViewModel(application: Application) : AndroidViewModel(applicat
         if (newSettings.autoConnect) {
             _uiState.value.discoveredReceivers.firstOrNull()?.let { selectReceiver(it) }
         }
+        if (_uiState.value.status == StreamStatus.STREAMING && streamQualityChanged(previous, newSettings)) {
+            scheduleLiveQualityApply()
+        }
     }
+
+    private fun streamQualityChanged(a: StreamingSettings, b: StreamingSettings): Boolean =
+        a.resolution != b.resolution || a.framerate != b.framerate ||
+            a.bitrate != b.bitrate || a.codec != b.codec
+
+    /** Debounced so tapping through presets does not restart the encoder repeatedly. */
+    private fun scheduleLiveQualityApply() {
+        qualityApplyJob?.cancel()
+        qualityApplyJob = viewModelScope.launch {
+            delay(400)
+            if (_uiState.value.status != StreamStatus.STREAMING) return@launch
+            val settings = _uiState.value.settings
+            val config = settings.toStreamConfig(
+                targetPort = resolvedTarget()?.port ?: _uiState.value.receiverPort
+            )
+            val intent = Intent(app, ScreenCaptureService::class.java).apply {
+                action = ScreenCaptureService.ACTION_UPDATE_CONFIG
+                putExtra(ScreenCaptureService.EXTRA_WIDTH, config.width)
+                putExtra(ScreenCaptureService.EXTRA_HEIGHT, config.height)
+                putExtra(ScreenCaptureService.EXTRA_DPI, config.dpi)
+                putExtra(ScreenCaptureService.EXTRA_BITRATE, config.bitrate)
+                putExtra(ScreenCaptureService.EXTRA_FPS, config.fps)
+                putExtra(ScreenCaptureService.EXTRA_CODEC, config.codecMime)
+                putExtra(ScreenCaptureService.EXTRA_GAMING_MODE, config.isGamingMode)
+            }
+            app.startForegroundService(intent)
+            _uiState.update {
+                it.copy(
+                    activeQualityLabel = qualityLabel(settings),
+                    connectionStatus = "Applying ${qualityLabel(settings)}…"
+                )
+            }
+        }
+    }
+
+    fun setActiveQuality(settings: StreamingSettings) {
+        _uiState.update { it.copy(activeQualityLabel = qualityLabel(settings)) }
+    }
+
+    fun qualityLabel(settings: StreamingSettings): String =
+        "${settings.resolution.width}x${settings.resolution.height} · " +
+            "${settings.framerate.fps} fps · ${settings.codec.name} · " +
+            "${String.format("%.1f", settings.bitrate.bps / 1_000_000f)} Mb/s"
 
     fun toggleGamingMode(enabled: Boolean) {
         updateSettings(_uiState.value.settings.copy(isGamingMode = enabled))

@@ -39,6 +39,7 @@ data class TvUiState(
     val aspectRatio: Float = 16f / 9f,
     val metrics: LatencyMetrics = LatencyMetrics(),
     val showHudOverlay: Boolean = true,
+    val showSettingsPanel: Boolean = false,
     val displayMode: TvDisplayMode = TvDisplayMode.FULL,
     val colorFilter: TvColorFilter = TvColorFilter.STANDARD,
     val connectionError: String? = null,
@@ -284,6 +285,10 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
 
     fun toggleHudOverlay() {
         _uiState.update { it.copy(showHudOverlay = !it.showHudOverlay) }
+    }
+
+    fun toggleSettingsPanel() {
+        _uiState.update { it.copy(showSettingsPanel = !it.showSettingsPanel) }
     }
 
     fun setDisplayMode(mode: TvDisplayMode) {

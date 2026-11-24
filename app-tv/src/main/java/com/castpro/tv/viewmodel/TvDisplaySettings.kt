@@ -1,14 +1,41 @@
 package com.castpro.tv.viewmodel
 
+import android.media.MediaCodec
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 
-/** How the decoded frame is placed on the TV panel. */
-enum class TvDisplayMode(val label: String) {
-    FIT("Fit"),
-    FULL("Full"),
-    STRETCH("Stretch"),
-    ZOOM("Zoom")
+/**
+ * How the decoded frame is placed on the TV panel.
+ *
+ * The scalingMode is applied directly to MediaCodec. SCALE_TO_FIT_WITH_CROPPING
+ * is what actually removes black bars from wide phone/game frames: the decoder
+ * fills the SurfaceView and crops the overflow instead of letterboxing it.
+ */
+enum class TvDisplayMode(
+    val label: String,
+    val scalingMode: Int,
+    val description: String
+) {
+    FIT(
+        "Fit",
+        MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT,
+        "Whole frame, black bars kept"
+    ),
+    FULL(
+        "Full",
+        MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING,
+        "Fill the TV, crop the edges"
+    ),
+    STRETCH(
+        "Stretch",
+        MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT,
+        "Force 16:9, some distortion"
+    ),
+    ZOOM(
+        "Zoom",
+        MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING,
+        "Fill and zoom in slightly"
+    )
 }
 
 /**

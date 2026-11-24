@@ -10,12 +10,14 @@ import com.castpro.core.streaming.decoder.HardwareVideoDecoder
 class TvSurfaceRenderer(
     private val surfaceView: SurfaceView,
     initialConfig: StreamConfig,
+    initialScalingMode: Int = android.media.MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING,
     private val onMetricsUpdated: (LatencyMetrics) -> Unit,
     private val onError: (String) -> Unit = {},
     private val clockOffsetProvider: () -> Long = { 0L }
 ) : SurfaceHolder.Callback {
 
     private var config: StreamConfig = initialConfig
+    private var scalingMode: Int = initialScalingMode
     private var decoder: HardwareVideoDecoder? = null
     var isSurfaceReady = false
         private set
@@ -29,6 +31,7 @@ class TvSurfaceRenderer(
         decoder = HardwareVideoDecoder(
             initialConfig = config,
             surface = holder.surface,
+            initialScalingMode = scalingMode,
             onMetricsUpdated = onMetricsUpdated,
             onError = onError,
             clockOffsetProvider = clockOffsetProvider
@@ -41,6 +44,11 @@ class TvSurfaceRenderer(
         isSurfaceReady = false
         decoder?.stop()
         decoder = null
+    }
+
+    fun setVideoScalingMode(mode: Int) {
+        scalingMode = mode
+        decoder?.setVideoScalingMode(mode)
     }
 
     fun onConfig(newConfig: StreamConfig) {

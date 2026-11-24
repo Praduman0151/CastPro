@@ -84,11 +84,12 @@ fun PhoneDashboardScreen(
         }
 
         if (state.status == StreamStatus.STREAMING) {
-            val settings = state.settings
+            val quality = state.activeQualityLabel.ifBlank {
+                "${state.settings.resolution.width}x${state.settings.resolution.height} · " +
+                    "${state.settings.framerate.fps} fps · ${state.settings.codec.name}"
+            }
             Text(
-                text = "Quality: ${settings.resolution.width}x${settings.resolution.height} · " +
-                    "${settings.framerate.fps} fps · ${settings.codec.name} · " +
-                    "${String.format("%.1f", settings.bitrate.bps / 1_000_000f)} Mb/s",
+                text = "Quality: $quality",
                 color = GamerAccent,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
