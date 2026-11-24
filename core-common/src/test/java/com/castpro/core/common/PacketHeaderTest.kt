@@ -56,6 +56,32 @@ class PacketHeaderTest {
     }
 
     @Test
+    fun testVideoFlagsSurviveTheWire() {
+        // The TV needs all three bits: keyframe starts decoding, codec config
+        // carries SPS/PPS, gaming mode drives the HUD.
+        val flags = (Constants.FLAG_KEYFRAME.toInt() or
+            Constants.FLAG_CODEC_CONFIG.toInt() or
+            Constants.FLAG_GAMING_MODE.toInt()).toByte()
+        val original = PacketHeader(
+            type = Constants.TYPE_VIDEO_NAL,
+            flags = flags,
+            sequenceNumber = 7,
+            timestampNano = 1_000L,
+            payloadLength = 128
+        )
+
+        val buffer = ByteBuffer.allocate(PacketHeader.HEADER_SIZE)
+        original.writeTo(buffer)
+        buffer.flip()
+        val decoded = PacketHeader.readFrom(buffer)!!
+
+        assertEquals(flags, decoded.flags)
+        assertEquals(true, (decoded.flags.toInt() and Constants.FLAG_KEYFRAME.toInt()) != 0)
+        assertEquals(true, (decoded.flags.toInt() and Constants.FLAG_CODEC_CONFIG.toInt()) != 0)
+        assertEquals(true, (decoded.flags.toInt() and Constants.FLAG_GAMING_MODE.toInt()) != 0)
+    }
+
+    @Test
     fun testCorruptedMagicBytesAreRejected() {
         val buffer = ByteBuffer.allocate(PacketHeader.HEADER_SIZE)
         buffer.put(0x00) // Invalid magic

@@ -3,33 +3,53 @@ package com.castpro.phone.service
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
+import android.Manifest
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.provider.Settings
 import android.util.Log
+import androidx.core.app.NotificationCompat
+import com.castpro.core.common.model.AudioMode
+import com.castpro.core.common.model.SessionConnectionState
+import com.castpro.core.common.model.CastSessionBus
+import com.castpro.core.common.model.GeometryPacket
 import com.castpro.core.common.model.StreamConfig
 import com.castpro.core.common.protocol.Constants
 import com.castpro.core.common.protocol.PacketHeader
+import com.castpro.core.common.protocol.StreamConfigPacket
 import com.castpro.core.streaming.audio.GameAudioCapture
 import com.castpro.core.streaming.encoder.HardwareScreenEncoder
 import com.castpro.core.streaming.monitor.ScreenResolutionMonitor
 import com.castpro.core.streaming.monitor.ScreenWakeLock
+import com.castpro.core.streaming.network.LocalNetwork
+import com.castpro.core.streaming.server.WebMirrorCapture
 import com.castpro.core.streaming.server.WebStreamingServer
-import com.castpro.core.streaming.transport.LowLatencySocketClient
+import com.castpro.core.streaming.transport.NoopStreamTransport
+import com.castpro.core.streaming.transport.StreamTransport
+import com.castpro.core.streaming.transport.TcpStreamTransport
+import com.castpro.phone.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 class ScreenCaptureService : Service() {
     private val tag = "ScreenCaptureService"
@@ -39,19 +59,44 @@ class ScreenCaptureService : Service() {
     private var virtualDisplay: VirtualDisplay? = null
     private var encoder: HardwareScreenEncoder? = null
     private var audioCapture: GameAudioCapture? = null
-    private var socketClient: LowLatencySocketClient? = null
+    private var transport: StreamTransport? = null
     private var resolutionMonitor: ScreenResolutionMonitor? = null
     private var wakeLock: ScreenWakeLock? = null
     private var webServer: WebStreamingServer? = null
+    private var webMirror: WebMirrorCapture? = null
+
+    private val stopping = AtomicBoolean(false)
+    private val started = AtomicBoolean(false)
+    private val jpegSequence = AtomicInteger(0)
+    private var audioMuted = false
+    private var currentHost: String = ""
+    private var currentReceiverName: String = ""
+    private var currentConfig: StreamConfig? = null
+    private var currentStreamConfigPacket: StreamConfigPacket? = null
+
+    @Volatile
+    private var transportConnected = false
+    private var hasConnectedOnce = false
+    private var lastTransportError: String? = null
+    private var connectionTimeoutJob: Job? = null
+
+    private val projectionCallback = object : MediaProjection.Callback() {
+        override fun onStop() {
+            Log.i(tag, "MediaProjection stopped by the system")
+            serviceScope.launch { stopStreaming() }
+        }
+    }
 
     companion object {
         const val ACTION_START = "com.castpro.phone.action.START"
         const val ACTION_STOP = "com.castpro.phone.action.STOP"
+        const val ACTION_TOGGLE_MUTE = "com.castpro.phone.action.TOGGLE_MUTE"
 
         const val EXTRA_RESULT_CODE = "extra_result_code"
         const val EXTRA_RESULT_DATA = "extra_result_data"
         const val EXTRA_HOST = "extra_host"
         const val EXTRA_PORT = "extra_port"
+        const val EXTRA_RECEIVER_NAME = "extra_receiver_name"
         const val EXTRA_GAMING_MODE = "extra_gaming_mode"
         const val EXTRA_WIDTH = "extra_width"
         const val EXTRA_HEIGHT = "extra_height"
@@ -59,18 +104,40 @@ class ScreenCaptureService : Service() {
         const val EXTRA_BITRATE = "extra_bitrate"
         const val EXTRA_FPS = "extra_fps"
         const val EXTRA_CODEC = "extra_codec"
+        const val EXTRA_AUDIO_MODE = "extra_audio_mode"
         const val EXTRA_ENABLE_OVERLAY = "extra_enable_overlay"
         const val EXTRA_ENABLE_WEB_SERVER = "extra_enable_web_server"
+        const val EXTRA_WEB_PORT = "extra_web_port"
         const val EXTRA_ENABLE_WAKE_LOCK = "extra_enable_wake_lock"
+
+        private const val CHANNEL_ID = "cast_pro_channel"
+        private const val NOTIFICATION_ID = 1001
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private fun appendStatus(msg: String) {
+        try {
+            java.io.File("/sdcard/Download/castpro-status.txt").appendText(
+                "${System.currentTimeMillis()} $msg\\n"
+            )
+        } catch (_: Exception) {
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            val trace = "thread=${thread.name}\n${android.util.Log.getStackTraceString(throwable)}"
+            for (path in listOf("/sdcard/Download/castpro-crash.log", "/sdcard/castpro-crash.log")) {
+                try { java.io.File(path).writeText(trace); break } catch (_: Exception) {}
+            }
+            try { getExternalFilesDir(null)?.let { java.io.File(it, "castpro-crash.log").writeText(trace) } } catch (_: Exception) {}
+            android.util.Log.e("CastProCrash", trace)
+            android.os.Process.killProcess(android.os.Process.myPid())
+            System.exit(1)
+        }
         createNotificationChannel()
-        // Do NOT call startForeground here: On Android 14+, mediaProjection FGS
-        // requires the MediaProjection token to be passed before or during startForeground.
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -83,43 +150,42 @@ class ScreenCaptureService : Service() {
                     @Suppress("DEPRECATION")
                     intent.getParcelableExtra(EXTRA_RESULT_DATA)
                 }
-                val host = intent.getStringExtra(EXTRA_HOST) ?: "127.0.0.1"
-                val port = intent.getIntExtra(EXTRA_PORT, 8998)
-                val isGamingMode = intent.getBooleanExtra(EXTRA_GAMING_MODE, true)
-                val width = intent.getIntExtra(EXTRA_WIDTH, 1920)
-                val height = intent.getIntExtra(EXTRA_HEIGHT, 1080)
-                val dpi = intent.getIntExtra(EXTRA_DPI, 320)
-                val bitrate = intent.getIntExtra(EXTRA_BITRATE, 15_000_000)
-                val fps = intent.getIntExtra(EXTRA_FPS, 60)
-                val codec = intent.getStringExtra(EXTRA_CODEC) ?: "video/avc"
-                val enableOverlay = intent.getBooleanExtra(EXTRA_ENABLE_OVERLAY, true)
-                val enableWebServer = intent.getBooleanExtra(EXTRA_ENABLE_WEB_SERVER, true)
-                val enableWakeLock = intent.getBooleanExtra(EXTRA_ENABLE_WAKE_LOCK, true)
-
-                if (resultData != null && resultCode != 0) {
-                    startStreamingWithProjection(
-                        resultCode = resultCode,
-                        resultData = resultData,
-                        host = host,
-                        port = port,
-                        isGamingMode = isGamingMode,
-                        width = width,
-                        height = height,
-                        dpi = dpi,
-                        bitrate = bitrate,
-                        fps = fps,
-                        codec = codec,
-                        enableOverlay = enableOverlay,
-                        enableWebServer = enableWebServer,
-                        enableWakeLock = enableWakeLock
-                    )
-                } else {
+                if (resultData == null || resultCode == 0) {
                     Log.e(tag, "Missing MediaProjection data in ACTION_START")
                     stopSelf()
+                    return START_NOT_STICKY
                 }
+                startStreamingWithProjection(
+                    resultCode = resultCode,
+                    resultData = resultData,
+                    host = intent.getStringExtra(EXTRA_HOST).orEmpty(),
+                    port = intent.getIntExtra(EXTRA_PORT, Constants.DEFAULT_STREAM_PORT),
+                    receiverName = intent.getStringExtra(EXTRA_RECEIVER_NAME).orEmpty(),
+                    isGamingMode = intent.getBooleanExtra(EXTRA_GAMING_MODE, true),
+                    width = intent.getIntExtra(EXTRA_WIDTH, 1920),
+                    height = intent.getIntExtra(EXTRA_HEIGHT, 1080),
+                    dpi = intent.getIntExtra(EXTRA_DPI, 320),
+                    bitrate = intent.getIntExtra(EXTRA_BITRATE, 15_000_000),
+                    fps = intent.getIntExtra(EXTRA_FPS, 60),
+                    codec = intent.getStringExtra(EXTRA_CODEC) ?: "video/avc",
+                    audioMode = runCatching {
+                        AudioMode.valueOf(intent.getStringExtra(EXTRA_AUDIO_MODE) ?: AudioMode.INTERNAL_GAME.name)
+                    }.getOrDefault(AudioMode.INTERNAL_GAME),
+                    enableOverlay = intent.getBooleanExtra(EXTRA_ENABLE_OVERLAY, true),
+                    enableWebServer = intent.getBooleanExtra(EXTRA_ENABLE_WEB_SERVER, true),
+                    webPort = intent.getIntExtra(EXTRA_WEB_PORT, Constants.DEFAULT_WEB_PORT),
+                    enableWakeLock = intent.getBooleanExtra(EXTRA_ENABLE_WAKE_LOCK, true)
+                )
             }
-            ACTION_STOP -> {
-                stopStreaming()
+            ACTION_STOP -> stopStreaming()
+            ACTION_TOGGLE_MUTE -> {
+                audioMuted = !audioMuted
+                audioCapture?.setMuted(audioMuted)
+                updateNotification(if (audioMuted) "Audio muted" else "Audio on")
+                startService(Intent(this, InGameOverlayService::class.java).apply {
+                    action = InGameOverlayService.ACTION_SET_MUTED
+                    putExtra(InGameOverlayService.EXTRA_MUTED, audioMuted)
+                })
             }
         }
         return START_NOT_STICKY
@@ -130,6 +196,7 @@ class ScreenCaptureService : Service() {
         resultData: Intent,
         host: String,
         port: Int,
+        receiverName: String,
         isGamingMode: Boolean,
         width: Int,
         height: Int,
@@ -137,15 +204,57 @@ class ScreenCaptureService : Service() {
         bitrate: Int,
         fps: Int,
         codec: String,
+        audioMode: AudioMode,
         enableOverlay: Boolean,
         enableWebServer: Boolean,
+        webPort: Int,
         enableWakeLock: Boolean
     ) {
-        val notification = createNotification("Cast Pro Streaming Active...")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(1001, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
-        } else {
-            startForeground(1001, notification)
+        // A previous run leaves `stopping` set; clear it before claiming a new session.
+        stopping.set(false)
+        appendStatus("startStreamingWithProjection entered")
+        if (!started.compareAndSet(false, true)) {
+            // A second start while a session is running: replace the old one.
+            stopStreaming()
+            started.set(true)
+            stopping.set(false)
+        }
+        currentHost = host
+        currentReceiverName = receiverName
+        CastSessionBus.setConnectionState(
+            if (host.isBlank()) SessionConnectionState.SEARCHING else SessionConnectionState.CONNECTING,
+            host = host,
+            receiverName = receiverName
+        )
+        val safeWebPort = webPort.coerceIn(1024, 65000)
+        // Android 14+ permits exactly one virtual display per MediaProjection.
+        // The native TV encoder and the browser JPEG mirror both need one, so
+        // the low-latency TV path wins when a TV target exists.
+        val webEnabled = enableWebServer && host.isBlank()
+        if (host.isBlank() && !webEnabled) {
+            failStart("Select a TV or enable the browser receiver first.")
+            return
+        }
+
+        val notification = createNotification("Starting Cast Pro…")
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                if (audioMode == AudioMode.MICROPHONE &&
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                    checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+                        PackageManager.PERMISSION_GRANTED
+                ) {
+                    types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                }
+                startForeground(NOTIFICATION_ID, notification, types)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            Log.e(tag, "Could not enter the mediaProjection foreground service", e)
+            failStart(e.message ?: "Could not start the screen capture service")
+            return
         }
 
         if (enableWakeLock) {
@@ -166,119 +275,294 @@ class ScreenCaptureService : Service() {
                     isGamingMode = isGamingMode,
                     codecMime = codec
                 )
-
-                // 1. Web Streaming Server (if enabled)
-                val web = if (enableWebServer) {
-                    val server = WebStreamingServer(this@ScreenCaptureService)
-                    server.start()
-                    webServer = server
-                    server
-                } else null
-
-                // 2. Hardware Socket Client (if host is provided)
-                val isDirectTvStream = host.isNotBlank() && host != "0.0.0.0"
-                val outputStream = if (isDirectTvStream) {
-                    val client = LowLatencySocketClient(host, port)
-                    socketClient = client
-                    client.connect()
-                } else null
-
-                // 3. Encoder
-                val enc = HardwareScreenEncoder(
-                    config = config,
-                    outputStream = outputStream,
-                    packetListener = { header, payload ->
-                        web?.broadcastPacket(header, payload)
-                    }
+                currentConfig = config
+                currentStreamConfigPacket = StreamConfigPacket(
+                    codec = com.castpro.core.common.model.VideoCodec.fromMime(codec),
+                    width = width,
+                    height = height,
+                    fps = fps,
+                    bitrate = bitrate,
+                    isGamingMode = isGamingMode
                 )
-                val inputSurface = enc.prepare()
-                encoder = enc
-
-                val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-                val projection = projectionManager.getMediaProjection(resultCode, resultData)
-                mediaProjection = projection
-
-                virtualDisplay = projection.createVirtualDisplay(
-                    "CastPro-Display",
-                    width,
-                    height,
-                    dpi,
-                    DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                    inputSurface,
-                    null,
-                    null
+                val project = (getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager)
+                    .getMediaProjection(resultCode, resultData)
+                if (project == null) {
+                    failStart("Screen recording permission was not granted. Start the projection and accept the dialog.")
+                    return@launch
+                }
+                mediaProjection = project
+                project.registerCallback(projectionCallback, Handler(Looper.getMainLooper()))
+                CastSessionBus.start(host.takeIf { it.isNotBlank() })
+                CastSessionBus.setConnectionState(
+                    if (host.isBlank()) SessionConnectionState.SEARCHING else SessionConnectionState.CONNECTING,
+                    host = currentHost,
+                    receiverName = currentReceiverName.takeIf { it.isNotBlank() }
                 )
 
-                enc.start()
+                // 1. Browser receiver (web-only fallback; see webEnabled above)
+                if (webEnabled) {
+                    val web = WebStreamingServer(
+                        context = this@ScreenCaptureService,
+                        httpPort = safeWebPort,
+                        wsPort = safeWebPort + 1,
+                        onClientCountChanged = { count ->
+                            CastSessionBus.setWebClients(count)
+                            if (host.isBlank()) {
+                                CastSessionBus.setConnectionState(
+                                    if (count > 0) SessionConnectionState.CONNECTED else SessionConnectionState.SEARCHING,
+                                    receiverName = if (count > 0) "Browser viewer" else null
+                                )
+                            }
+                        },
+                        onError = { message -> CastSessionBus.setError(message) }
+                    )
+                    web.start()
+                    webServer = web
 
-                // 4. Audio capture (if socket connected)
-                if (outputStream != null) {
-                    val audio = GameAudioCapture(projection, outputStream)
-                    audioCapture = audio
-                    audio.start()
+                    val mirror = WebMirrorCapture(
+                        projection = project,
+                        shouldCapture = { web.hasClients() },
+                        onJpeg = { jpeg -> sendJpegToWeb(jpeg) },
+                        onError = { message -> CastSessionBus.setError(message) }
+                    )
+                    mirror.start()
+                    webMirror = mirror
                 }
 
-                // 5. Dynamic Screen Resolution Monitor
-                val monitor = ScreenResolutionMonitor(this@ScreenCaptureService) { geometry ->
-                    web?.broadcastGeometry(geometry)
-                    outputStream?.let { stream ->
-                        synchronized(stream) {
-                            try {
-                                val geomPayload = geometry.toByteArray()
-                                val headerBuffer = ByteBuffer.allocate(PacketHeader.HEADER_SIZE)
-                                val header = PacketHeader(
-                                    type = Constants.TYPE_GEOMETRY,
-                                    flags = 0,
-                                    sequenceNumber = 0,
-                                    timestampNano = System.nanoTime(),
-                                    payloadLength = geomPayload.size
-                                )
-                                header.writeTo(headerBuffer)
-                                stream.write(headerBuffer.array(), 0, PacketHeader.HEADER_SIZE)
-                                stream.write(geomPayload)
-                                stream.flush()
-                            } catch (e: Exception) {
-                                Log.e(tag, "Failed to send geometry update", e)
-                            }
-                        }
+                // 2. Native TV connection (optional, low latency)
+                if (host.isNotBlank()) {
+                    val tcp = TcpStreamTransport(host, port) { connected, _, error ->
+                        onTransportChanged(connected, error)
                     }
+                    transport = tcp
+                    tcp.start()
+
+                    try {
+                        val enc = HardwareScreenEncoder(
+                            config = config,
+                            transport = tcp,
+                            onStats = { stats ->
+                                CastSessionBus.updateStats(
+                                    fps = stats.fps,
+                                    bitrateMbps = stats.bitrateMbps,
+                                    framesSent = stats.framesSent,
+                                    bytesSent = stats.bytesSent,
+                                    droppedFrames = stats.droppedFrames
+                                )
+                            },
+                            onError = { message -> CastSessionBus.setError(message) }
+                        )
+                        val inputSurface = enc.prepare()
+                        enc.start()
+                        encoder = enc
+                        virtualDisplay = project.createVirtualDisplay(
+                            "CastPro-Display",
+                            width,
+                            height,
+                            dpi,
+                            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                            inputSurface,
+                            null,
+                            null
+                        )
+                        if (virtualDisplay == null) {
+                            failStart("Could not create a virtual display from the screen projection.")
+                            return@launch
+                        }
+                    } catch (e: Exception) {
+                        Log.e(tag, "Could not start TV encoder", e)
+                        failStart(e.message ?: "Could not start the video encoder.")
+                        return@launch
+                    }
+
+                }
+
+                // Audio goes to the TV and to any browser viewer. Browser-only
+                // sessions still need the capture thread, so use a sink that
+                // drops packets when there is no native transport.
+                if (host.isNotBlank() || webEnabled) {
+                    try {
+                        val audio = GameAudioCapture(
+                            context = this@ScreenCaptureService,
+                            projection = project,
+                            transport = transport ?: NoopStreamTransport,
+                            mode = audioMode,
+                            packetListener = { header, payload ->
+                                webServer?.broadcastPacket(header, payload)
+                            },
+                            onError = { message -> CastSessionBus.setError(message) }
+                        )
+                        audio.start()
+                        audioCapture = audio
+                    } catch (e: Exception) {
+                        Log.e(tag, "Could not start audio", e)
+                    }
+                }
+
+                // 3. Geometry/orientation updates for both receivers.
+                val monitor = ScreenResolutionMonitor(this@ScreenCaptureService) { geometry ->
+                    webServer?.broadcastGeometry(geometry)
+                    transport?.let { sendGeometry(it, geometry) }
                 }
                 monitor.start()
                 resolutionMonitor = monitor
 
-                // 6. Floating In-Game HUD Overlay
-                if (enableOverlay && (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this@ScreenCaptureService))) {
-                    startService(Intent(this@ScreenCaptureService, InGameOverlayService::class.java).apply {
-                        action = InGameOverlayService.ACTION_SHOW
-                    })
+                if (enableOverlay &&
+                    (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this@ScreenCaptureService))
+                ) {
+                    runCatching {
+                        startService(Intent(this@ScreenCaptureService, InGameOverlayService::class.java).apply {
+                            action = InGameOverlayService.ACTION_SHOW
+                        })
+                    }
                 }
 
-                updateNotification("Streaming: $width x $height @ ${fps}FPS • Gaming: ${if (isGamingMode) "ON" else "OFF"}")
-                Log.i(tag, "Screen casting successfully running")
+                val destination = listOfNotNull(
+                    receiverName.takeIf { host.isNotBlank() }?.let { "TV: $it" }
+                        ?: currentHost.takeIf { host.isNotBlank() }?.let { "TV: $it" },
+                    if (webEnabled) "Web: http://${LocalNetwork.activeIpv4(this@ScreenCaptureService)}:$safeWebPort" else null
+                ).joinToString(" • ")
+                updateNotification("Streaming $width×$height @ ${fps}FPS${if (destination.isBlank()) "" else " • $destination"}")
+                Log.i(tag, "Screen casting pipeline started (host='$host', web=$webEnabled)")
             } catch (e: Exception) {
                 Log.e(tag, "Failed to start streaming pipeline", e)
-                stopStreaming()
+                stopStreaming(failure = e.message ?: "Could not start screen capture")
             }
         }
     }
 
-    fun stopStreaming() {
+    private fun onTransportChanged(connected: Boolean, error: String?) {
+        transportConnected = connected
+        CastSessionBus.setReceiverConnected(connected, currentHost)
+        if (connected) {
+            hasConnectedOnce = true
+            lastTransportError = null
+            connectionTimeoutJob?.cancel()
+            connectionTimeoutJob = null
+            CastSessionBus.setConnectionState(
+                SessionConnectionState.CONNECTED,
+                currentHost,
+                currentReceiverName.takeIf { it.isNotBlank() }
+            )
+            sendStreamConfig()
+            encoder?.requestKeyFrame()
+            val name = currentReceiverName.takeIf { it.isNotBlank() }
+                ?: currentHost.takeIf { it.isNotBlank() }
+            updateNotification("Connected to TV${name?.let { " ($it)" } ?: ""}")
+        } else {
+            if (error != null) lastTransportError = error
+            val state = if (hasConnectedOnce) {
+                SessionConnectionState.DISCONNECTED
+            } else {
+                SessionConnectionState.CONNECTING
+            }
+            CastSessionBus.setConnectionState(
+                state,
+                currentHost,
+                currentReceiverName.takeIf { it.isNotBlank() },
+                error ?: lastTransportError
+            )
+            val target = currentHost.takeIf { it.isNotBlank() }
+            updateNotification(
+                if (state == SessionConnectionState.DISCONNECTED) {
+                    "TV disconnected${target?.let { " ($it)" } ?: ""} • reconnecting…"
+                } else {
+                    "Connecting to TV${target?.let { " ($it)" } ?: ""}…"
+                }
+            )
+            scheduleConnectionFailure()
+        }
+    }
+
+    /**
+     * A failing TCP connect is retried forever by TcpStreamTransport. Keep the
+     * UI in Connecting/Disconnected while that happens, and only call it a
+     * failure after a short grace period; a later reconnect clears it again.
+     */
+    private fun scheduleConnectionFailure() {
+        connectionTimeoutJob?.cancel()
+        connectionTimeoutJob = serviceScope.launch {
+            delay(8_000)
+            if (!transportConnected && started.get() && !stopping.get()) {
+                CastSessionBus.setConnectionState(
+                    SessionConnectionState.FAILED,
+                    currentHost,
+                    currentReceiverName.takeIf { it.isNotBlank() },
+                    lastTransportError ?: "TV did not accept the connection"
+                )
+                updateNotification("Connection Failed${lastTransportError?.let { ": $it" } ?: ""}")
+            }
+        }
+    }
+
+    private fun failStart(message: String) {
+        Log.e(tag, "Screen casting could not start: $message")
+        stopStreaming(failure = message)
+    }
+
+    private fun sendStreamConfig() {
+        val tcp = transport ?: return
+        val packet = currentStreamConfigPacket ?: return
+        val payload = packet.toByteArray()
+        val header = PacketHeader(
+            type = Constants.TYPE_STREAM_CONFIG,
+            flags = 0,
+            sequenceNumber = 0,
+            timestampNano = System.currentTimeMillis() * 1_000_000L,
+            payloadLength = payload.size
+        )
+        tcp.send(header, payload)
+    }
+
+    private fun sendGeometry(tcp: StreamTransport, geometry: GeometryPacket) {
+        val payload = geometry.toByteArray()
+        val header = PacketHeader(
+            type = Constants.TYPE_GEOMETRY,
+            flags = 0,
+            sequenceNumber = 0,
+            timestampNano = System.currentTimeMillis() * 1_000_000L,
+            payloadLength = payload.size
+        )
+        tcp.send(header, payload)
+    }
+
+    private fun sendJpegToWeb(jpeg: ByteArray) {
+        val web = webServer ?: return
+        val header = PacketHeader(
+            type = Constants.TYPE_VIDEO_JPEG,
+            flags = 0,
+            sequenceNumber = jpegSequence.incrementAndGet(),
+            timestampNano = System.currentTimeMillis() * 1_000_000L,
+            payloadLength = jpeg.size
+        )
+        web.broadcastPacket(header, jpeg)
+    }
+
+    private fun stopStreaming(failure: String? = null) {
+        if (!stopping.compareAndSet(false, true)) return
+        val failedHost = currentHost
+        val failedName = currentReceiverName
+        Log.i(tag, "Stopping screen casting${failure?.let { ": $it" } ?: ""}")
         try {
+            webMirror?.stop()
             resolutionMonitor?.stop()
             wakeLock?.release()
             webServer?.stop()
             audioCapture?.stop()
             encoder?.stop()
             virtualDisplay?.release()
+            runCatching { mediaProjection?.unregisterCallback(projectionCallback) }
             mediaProjection?.stop()
-            socketClient?.disconnect()
-
-            startService(Intent(this, InGameOverlayService::class.java).apply {
-                action = InGameOverlayService.ACTION_HIDE
-            })
+            transport?.stop()
+            runCatching {
+                startService(Intent(this, InGameOverlayService::class.java).apply {
+                    action = InGameOverlayService.ACTION_HIDE
+                })
+            }
         } catch (e: Exception) {
             Log.e(tag, "Error stopping stream", e)
         } finally {
+            webMirror = null
             resolutionMonitor = null
             wakeLock = null
             webServer = null
@@ -286,9 +570,43 @@ class ScreenCaptureService : Service() {
             encoder = null
             virtualDisplay = null
             mediaProjection = null
-            socketClient = null
+            transport = null
+            currentConfig = null
+            currentStreamConfigPacket = null
+            currentHost = ""
+            currentReceiverName = ""
+            audioMuted = false
+            transportConnected = false
+            hasConnectedOnce = false
+            lastTransportError = null
+            connectionTimeoutJob?.cancel()
+            connectionTimeoutJob = null
+            CastSessionBus.stop(failure)
+            if (failure != null) {
+                CastSessionBus.setConnectionState(
+                    SessionConnectionState.FAILED,
+                    failedHost.takeIf { it.isNotBlank() },
+                    failedName.takeIf { it.isNotBlank() },
+                    failure
+                )
+            }
+            // stopForeground / stopSelf touch the service's main-thread state;
+            // post them so a background (IO) teardown cannot trigger an ANR or
+            // a CalledFromWrongThread crash.
+            Handler(Looper.getMainLooper()).post {
+                stopForegroundCompat()
+                stopSelf()
+            }
+            started.set(false)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun stopForegroundCompat() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+        } else {
+            stopForeground(true)
         }
     }
 
@@ -301,35 +619,42 @@ class ScreenCaptureService : Service() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                "cast_pro_channel",
+                CHANNEL_ID,
                 "Cast Pro Streaming",
                 NotificationManager.IMPORTANCE_LOW
             )
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
 
     private fun createNotification(text: String): Notification {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, "cast_pro_channel")
-                .setContentTitle("Cast Pro Active")
-                .setContentText(text)
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setOngoing(true)
-                .build()
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(this)
-                .setContentTitle("Cast Pro Active")
-                .setContentText(text)
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .build()
-        }
+        val openIntent = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val stopIntent = PendingIntent.getService(
+            this,
+            1,
+            Intent(this, ScreenCaptureService::class.java).apply { action = ACTION_STOP },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Cast Pro Active")
+            .setContentText(text)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentIntent(openIntent)
+            .addAction(android.R.drawable.ic_media_pause, "Stop", stopIntent)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .build()
     }
 
     private fun updateNotification(text: String) {
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(1001, createNotification(text))
+        runCatching {
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.notify(NOTIFICATION_ID, createNotification(text))
+        }
     }
 }

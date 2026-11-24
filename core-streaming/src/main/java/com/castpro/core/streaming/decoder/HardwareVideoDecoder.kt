@@ -7,101 +7,279 @@ import android.util.Log
 import android.view.Surface
 import com.castpro.core.common.model.LatencyMetrics
 import com.castpro.core.common.model.StreamConfig
-import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.ceil
 
+/**
+ * Hardware TV decoder. It is configured from the stream config packet sent by
+ * the phone, so changing H.264/HEVC or resolution no longer leaves the TV
+ * decoding with stale parameters. After a reconnect it waits for an IDR before
+ * queueing anything, which prevents the frozen/corrupt first frame.
+ */
 class HardwareVideoDecoder(
-    private val config: StreamConfig,
+    initialConfig: StreamConfig,
     private val surface: Surface,
-    private val onMetricsUpdated: (LatencyMetrics) -> Unit
+    private val onMetricsUpdated: (LatencyMetrics) -> Unit,
+    private val onError: (String) -> Unit = {}
 ) {
     private val tag = "HardwareVideoDecoder"
+    private val lock = Any()
+    @Volatile private var config: StreamConfig = initialConfig
     private var mediaCodec: MediaCodec? = null
-    private val isRunning = AtomicBoolean(false)
+    private val running = AtomicBoolean(false)
+    private var waitingForKeyframe = true
 
     private var frameCount = 0
+    private var bytesInWindow = 0L
     private var lastFpsTimestamp = System.currentTimeMillis()
-    private var totalBytesReceived = 0L
 
     fun start() {
-        try {
-            val format = MediaFormat.createVideoFormat(config.codecMime, config.width, config.height).apply {
-                setInteger(MediaFormat.KEY_PRIORITY, 0)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
-                }
+        synchronized(lock) { startCodec() }
+    }
+
+    fun reconfigure(newConfig: StreamConfig) {
+        synchronized(lock) {
+            if (newConfig.codecMime == config.codecMime &&
+                newConfig.width == config.width &&
+                newConfig.height == config.height
+            ) {
+                config = newConfig
+                return
             }
-
-            val codec = MediaCodec.createDecoderByType(config.codecMime)
-            codec.configure(format, surface, null, 0)
-            codec.start()
-            mediaCodec = codec
-            isRunning.set(true)
-        } catch (e: Exception) {
-            Log.e(tag, "Failed to initialize MediaCodec video decoder", e)
+            Log.i(tag, "Reconfiguring decoder: ${newConfig.codecMime} ${newConfig.width}x${newConfig.height}")
+            stopCodec()
+            config = newConfig
+            startCodec()
         }
     }
 
-    fun updateGeometry(geometry: com.castpro.core.common.model.GeometryPacket) {
-        Log.i(tag, "Decoder received dynamic geometry: ${geometry.width}x${geometry.height}, ratio=${geometry.aspectRatio}")
-    }
-
-    fun decodeFrame(data: ByteArray, offset: Int, length: Int, timestampNano: Long, isGamingMode: Boolean) {
-        val codec = mediaCodec ?: return
-        if (!isRunning.get()) return
-
-        val inputIndex = codec.dequeueInputBuffer(10_000)
-        if (inputIndex >= 0) {
-            val inputBuffer = codec.getInputBuffer(inputIndex)
-            inputBuffer?.clear()
-            inputBuffer?.put(data, offset, length)
-            codec.queueInputBuffer(inputIndex, 0, length, timestampNano / 1000, 0)
+    private fun startCodec() {
+        if (!running.compareAndSet(false, true)) return
+        if (!surface.isValid) {
+            running.set(false)
+            onError("The TV display surface closed before the decoder started.")
+            return
         }
 
-        val bufferInfo = MediaCodec.BufferInfo()
-        var outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
-        while (outputIndex >= 0) {
-            // Render directly to the surface immediately (render = true)
+        // Try the platform's preferred hardware decoder first, then the
+        // software AVC/HEVC decoder. Some TV SoCs advertise a codec but reject
+        // configure() or start() for the phone's resolution; without a fallback
+        // the receiver reports an error and never draws another frame.
+        val candidates = listOf(null) + softwareDecoderNames()
+        var lastError: Exception? = null
+        for (preferredName in candidates) {
+            var codec: MediaCodec? = null
+            try {
+                codec = if (preferredName == null) {
+                    MediaCodec.createDecoderByType(config.codecMime)
+                } else {
+                    MediaCodec.createByCodecName(preferredName)
+                } ?: throw IllegalStateException("No decoder for ${config.codecMime}")
+
+                val capabilities = codec.codecInfo
+                    ?.getCapabilitiesForType(config.codecMime)
+                    ?.videoCapabilities
+                val width = align(config.width, capabilities?.widthAlignment ?: 1)
+                val height = align(config.height, capabilities?.heightAlignment ?: 1)
+                if (capabilities != null && !capabilities.isSizeSupported(width, height)) {
+                    throw IllegalStateException("Decoder does not support ${width}x${height}")
+                }
+
+                val format = MediaFormat.createVideoFormat(config.codecMime, width, height).apply {
+                    setInteger(MediaFormat.KEY_PRIORITY, 0)
+                    // A full IDR at 25 Mbps can be larger than the decoder's
+                    // default input buffer; without this, put() throws on the
+                    // first keyframe (about one second into the stream).
+                    setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, MAX_INPUT_BYTES)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+                    }
+                }
+                codec.configure(format, surface, null, 0)
+                codec.start()
+                mediaCodec = codec
+                waitingForKeyframe = true
+                resetMetrics()
+                Log.i(
+                    tag,
+                    "Decoder started: ${preferredName ?: "hardware"} " +
+                        "${config.codecMime} ${width}x${height}"
+                )
+                return
+            } catch (e: Exception) {
+                lastError = e
+                Log.w(tag, "Decoder ${preferredName ?: "hardware"} rejected the stream", e)
+                codec?.let { runCatching { it.release() } }
+            }
+        }
+
+        running.set(false)
+        Log.e(tag, "Failed to initialize decoder for ${config.codecMime}", lastError)
+        onError("This TV cannot decode ${config.codecMime}. Switch the phone to H.264.")
+    }
+
+    private fun softwareDecoderNames(): List<String> = when {
+        config.codecMime.equals(MediaFormat.MIMETYPE_VIDEO_AVC, ignoreCase = true) ->
+            listOf("c2.android.avc.decoder", "OMX.google.h264.decoder")
+        config.codecMime.equals(MediaFormat.MIMETYPE_VIDEO_HEVC, ignoreCase = true) ->
+            listOf("c2.android.hevc.decoder", "OMX.google.hevc.decoder")
+        else -> emptyList()
+    }
+
+    private fun align(value: Int, alignment: Int): Int {
+        if (alignment <= 1) return value
+        return ceil(value.toFloat() / alignment).toInt() * alignment
+    }
+
+    fun reset() {
+        synchronized(lock) {
+            runCatching { mediaCodec?.flush() }
+            waitingForKeyframe = true
+            resetMetrics()
+        }
+    }
+
+    fun decodeFrame(
+        data: ByteArray,
+        offset: Int,
+        length: Int,
+        timestampNano: Long,
+        isGamingMode: Boolean,
+        isCodecConfig: Boolean = false,
+        isKeyframe: Boolean = false
+    ) {
+        synchronized(lock) {
+            val codec = mediaCodec ?: return
+            if (!running.get()) return
+
+            try {
+                // The sender marks IDRs; the byte scan is only a fallback for
+                // older senders that emit Annex-B start codes.
+                val keyFrame = isKeyframe || isKeyFrame(data, offset, length)
+                // Parameter sets are safe (and necessary) before the first IDR.
+                // Queue them even while waiting, but keep waiting for a real IDR.
+                if (waitingForKeyframe && !isCodecConfig && !keyFrame) return
+
+                val inputIndex = codec.dequeueInputBuffer(if (keyFrame) 30_000 else 5_000)
+                if (inputIndex < 0) return
+
+                val inputBuffer = codec.getInputBuffer(inputIndex) ?: return
+                val bytesToQueue = minOf(length, inputBuffer.remaining())
+                if (bytesToQueue <= 0) return
+                inputBuffer.put(data, offset, bytesToQueue)
+                // Parameter sets must be flagged as codec config or decoders
+                // on many TVs reject the following IDR.
+                val codecFlags = if (isCodecConfig) MediaCodec.BUFFER_FLAG_CODEC_CONFIG else 0
+                codec.queueInputBuffer(inputIndex, 0, bytesToQueue, timestampNano / 1_000, codecFlags)
+                if (!isCodecConfig && keyFrame) waitingForKeyframe = false
+                bytesInWindow += bytesToQueue
+
+                drainOutput(codec, timestampNano, isGamingMode)
+            } catch (e: Exception) {
+                Log.e(tag, "Decode error", e)
+                runCatching { mediaCodec?.flush() }
+                waitingForKeyframe = true
+                onError(e.message ?: "Video decoder error")
+            }
+        }
+    }
+
+    private fun drainOutput(codec: MediaCodec, timestampNano: Long, isGamingMode: Boolean) {
+        val info = MediaCodec.BufferInfo()
+        while (true) {
+            val outputIndex = codec.dequeueOutputBuffer(info, 0)
+            if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                val format = codec.outputFormat
+                Log.i(
+                    tag,
+                    "Decoder output format: ${format.getString(MediaFormat.KEY_MIME)} " +
+                        "${format.getInteger(MediaFormat.KEY_WIDTH)}x${format.getInteger(MediaFormat.KEY_HEIGHT)}"
+                )
+                continue
+            }
+            if (outputIndex < 0) break
+
             codec.releaseOutputBuffer(outputIndex, true)
             frameCount++
-            totalBytesReceived += length
-
-            // Calculate latency and FPS
-            val nowNano = System.nanoTime()
-            val latencyMs = ((nowNano - timestampNano).coerceAtLeast(0) / 1_000_000f)
 
             val nowMs = System.currentTimeMillis()
-            if (nowMs - lastFpsTimestamp >= 1000) {
-                val currentFps = frameCount
-                val bitrateMbps = (totalBytesReceived * 8f) / (1_000_000f)
-                
+            if (nowMs - lastFpsTimestamp >= 1_000) {
+                val elapsed = (nowMs - lastFpsTimestamp).coerceAtLeast(1)
+                val fps = ((frameCount * 1_000L) / elapsed).toInt()
+                val bitrate = (bytesInWindow * 8f) / elapsed / 1_000f
+                val latencyMs = ((System.currentTimeMillis() * 1_000_000L - timestampNano)
+                    .coerceIn(0L, 1_000_000_000L) / 1_000_000f)
                 onMetricsUpdated(
                     LatencyMetrics(
-                        currentFps = currentFps,
+                        currentFps = fps,
                         latencyMs = latencyMs,
-                        bitrateMbps = bitrateMbps,
+                        bitrateMbps = bitrate,
                         isGamingModeActive = isGamingMode
                     )
                 )
-
                 frameCount = 0
-                totalBytesReceived = 0L
+                bytesInWindow = 0L
                 lastFpsTimestamp = nowMs
             }
+        }
+    }
 
-            outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
+    private fun isKeyFrame(data: ByteArray, offset: Int, length: Int): Boolean {
+        if (length < 5) return false
+        val hevc = config.codecMime.equals(MediaFormat.MIMETYPE_VIDEO_HEVC, ignoreCase = true)
+        var index = offset
+        val end = offset + length
+        while (index + 4 < end) {
+            if (data[index].toInt() == 0 && data[index + 1].toInt() == 0) {
+                val header = when {
+                    data[index + 2].toInt() == 1 -> index + 3
+                    data[index + 2].toInt() == 0 && data[index + 3].toInt() == 1 -> index + 4
+                    else -> {
+                        index++
+                        continue
+                    }
+                }
+                if (header < end) {
+                    val nalType = data[header].toInt() and 0x1F
+                    if (hevc) {
+                        // HEVC IRAP pictures: BLA/IDR/CRA (16..21). VPS/SPS/PPS
+                        // (32..34) may precede the picture in the same buffer.
+                        if (nalType in 16..21) return true
+                    } else if (nalType == 5) {
+                        return true
+                    }
+                }
+                index = header
+            } else {
+                index++
+            }
+        }
+        return false
+    }
+
+    private fun resetMetrics() {
+        frameCount = 0
+        bytesInWindow = 0L
+        lastFpsTimestamp = System.currentTimeMillis()
+    }
+
+    private fun stopCodec() {
+        running.set(false)
+        try {
+            mediaCodec?.stop()
+        } catch (_: Exception) {
+        } finally {
+            runCatching { mediaCodec?.release() }
+            mediaCodec = null
         }
     }
 
     fun stop() {
-        isRunning.set(false)
-        try {
-            mediaCodec?.stop()
-            mediaCodec?.release()
-        } catch (e: Exception) {
-            Log.e(tag, "Error releasing decoder", e)
-        } finally {
-            mediaCodec = null
-        }
+        synchronized(lock) { stopCodec() }
+    }
+
+    companion object {
+        /** Enough for a full frame at the maximum supported bitrate. */
+        private const val MAX_INPUT_BYTES = 4 * 1024 * 1024
     }
 }

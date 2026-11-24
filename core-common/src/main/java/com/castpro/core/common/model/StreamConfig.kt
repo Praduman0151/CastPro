@@ -11,9 +11,17 @@ data class StreamConfig(
     val port: Int = 8998
 )
 
+enum class DiscoverySource { NSD, UDP, MANUAL, QR }
+
 data class DiscoveredReceiver(
     val deviceName: String,
     val hostAddress: String,
     val port: Int,
-    val isAvailable: Boolean = true
-)
+    val isAvailable: Boolean = true,
+    val source: DiscoverySource = DiscoverySource.NSD,
+    val lastSeenMs: Long = System.currentTimeMillis()
+) {
+    val id: String get() = "$hostAddress:$port"
+
+    fun toPairingInfo(): PairingInfo = PairingInfo(hostAddress, port, deviceName)
+}

@@ -52,4 +52,55 @@ class StreamConfigTest {
         assertEquals(25_000_000, config.bitrate)
         assertEquals("video/hevc", config.codecMime)
     }
+
+    @Test
+    fun testPairingInfoRoundTrip() {
+        val info = com.castpro.core.common.model.PairingInfo(
+            host = "192.168.1.50",
+            port = 8998,
+            name = "Living Room TV"
+        )
+        val parsed = com.castpro.core.common.model.PairingInfo.parse(info.toUri())
+        assertNotNull(parsed)
+        assertEquals("192.168.1.50", parsed!!.host)
+        assertEquals(8998, parsed.port)
+        assertEquals("Living Room TV", parsed.name)
+    }
+
+    @Test
+    fun testPairingAcceptsPlainAddressAndPort() {
+        val parsed = com.castpro.core.common.model.PairingInfo.parse("192.168.0.20:9001")
+        assertNotNull(parsed)
+        assertEquals("192.168.0.20", parsed!!.host)
+        assertEquals(9001, parsed.port)
+
+        val web = com.castpro.core.common.model.PairingInfo.parse("http://192.168.0.20:8080")
+        assertNotNull(web)
+        assertEquals("192.168.0.20", web!!.host)
+        assertEquals(8998, web.port)
+        assertEquals(8080, web.webPort)
+    }
+
+    @Test
+    fun testPairingRejectsGarbage() {
+        assertEquals(null, com.castpro.core.common.model.PairingInfo.parse(""))
+        assertEquals(null, com.castpro.core.common.model.PairingInfo.parse("not a host"))
+        assertEquals(null, com.castpro.core.common.model.PairingInfo.parse("castpro://connect?port=8998"))
+    }
+
+    @Test
+    fun testStreamConfigPacketRoundTrip() {
+        val original = com.castpro.core.common.protocol.StreamConfigPacket(
+            codec = com.castpro.core.common.model.VideoCodec.HEVC,
+            width = 1280,
+            height = 720,
+            fps = 120,
+            bitrate = 25_000_000,
+            rotationDegrees = 90,
+            isGamingMode = true
+        )
+        val parsed = com.castpro.core.common.protocol.StreamConfigPacket.fromByteArray(original.toByteArray())
+        assertNotNull(parsed)
+        assertEquals(original, parsed)
+    }
 }

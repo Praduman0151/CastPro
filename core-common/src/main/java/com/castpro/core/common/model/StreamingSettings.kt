@@ -19,9 +19,20 @@ enum class BitratePreset(val displayName: String, val bps: Int) {
     EXTREME_40M("40 Mbps (Extreme)", 40_000_000)
 }
 
-enum class VideoCodec(val displayName: String, val mimeType: String) {
-    H264("H.264 / AVC (Broad Compatibility)", "video/avc"),
-    HEVC("H.265 / HEVC (High Efficiency)", "video/hevc")
+enum class VideoCodec(
+    val displayName: String,
+    val mimeType: String,
+    val id: Byte
+) {
+    H264("H.264 / AVC (Broad Compatibility)", "video/avc", 1),
+    HEVC("H.265 / HEVC (High Efficiency)", "video/hevc", 2);
+
+    companion object {
+        fun fromId(id: Byte): VideoCodec? = values().firstOrNull { it.id == id }
+
+        fun fromMime(mime: String?): VideoCodec =
+            values().firstOrNull { it.mimeType.equals(mime, ignoreCase = true) } ?: H264
+    }
 }
 
 enum class AudioMode(val displayName: String) {
@@ -40,7 +51,8 @@ data class StreamingSettings(
     val enableKeepAwake: Boolean = true,
     val enableWebServer: Boolean = true,
     val webPort: Int = 8080,
-    val isGamingMode: Boolean = true
+    val isGamingMode: Boolean = true,
+    val autoConnect: Boolean = true
 ) {
     fun toStreamConfig(targetPort: Int = 8998): StreamConfig {
         return StreamConfig(

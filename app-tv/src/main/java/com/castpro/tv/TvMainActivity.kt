@@ -18,6 +18,7 @@ class TvMainActivity : ComponentActivity() {
     private val viewModel: TvReceiverViewModel by viewModels()
     private var surfaceRenderer: TvSurfaceRenderer? = null
     private var audioPlayer: TvAudioPlayer? = null
+    private var serverStarted = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -26,32 +27,60 @@ class TvMainActivity : ComponentActivity() {
         val player = TvAudioPlayer().apply { start() }
         audioPlayer = player
 
-        viewModel.startServer(
-            onFrameReceived = { data, offset, length, timestampNano, isGamingMode ->
-                surfaceRenderer?.onFrame(data, offset, length, timestampNano, isGamingMode)
-            },
-            onAudioReceived = { data, offset, length ->
-                player.playAudioChunk(data, offset, length)
-            },
-            onGeometryReceived = { geometry ->
-                surfaceRenderer?.onGeometry(geometry)
-            }
-        )
-
         setContent {
             val state by viewModel.uiState.collectAsState()
             TvReceiverScreen(
                 state = state,
                 onSurfaceCreated = { surfaceView ->
-                    surfaceRenderer = TvSurfaceRenderer(
+                    val renderer = TvSurfaceRenderer(
                         surfaceView = surfaceView,
-                        config = StreamConfig(),
+                        initialConfig = viewModel.uiState.value.streamConfig,
                         onMetricsUpdated = { metrics ->
-                            runOnUiThread {
-                                viewModel.updateMetrics(metrics)
-                            }
+                            runOnUiThread { viewModel.updateMetrics(metrics) }
+                        },
+                        onError = { message ->
+                            // Surface-level codec errors are non-fatal; keep
+                            // the receiver usable but show what happened.
+                            android.util.Log.e("TvMainActivity", message)
+                            runOnUiThread { viewModel.reportError(message) }
                         }
                     )
+                    surfaceRenderer = renderer
+
+                    if (!serverStarted) {
+                        serverStarted = true
+                        viewModel.startServer(
+                            onStreamConfig = { packet ->
+                                val config = StreamConfig(
+                                    width = packet.width,
+                                    height = packet.height,
+                                    fps = packet.fps,
+                                    bitrate = packet.bitrate,
+                                    isGamingMode = packet.isGamingMode,
+                                    codecMime = packet.codec.mimeType
+                                )
+                                surfaceRenderer?.onConfig(config)
+                            },
+                            onFrameReceived = { data, offset, length, timestampNano, isGamingMode, isCodecConfig, isKeyframe ->
+                                surfaceRenderer?.onFrame(
+                                    data,
+                                    offset,
+                                    length,
+                                    timestampNano,
+                                    isGamingMode,
+                                    isCodecConfig,
+                                    isKeyframe
+                                )
+                            },
+                            onAudioReceived = { data, offset, length ->
+                                player.playAudioChunk(data, offset, length)
+                            },
+                            onGeometryReceived = { geometry ->
+                                runOnUiThread { viewModel.updateAspectRatio(geometry.aspectRatio) }
+                                surfaceRenderer?.onGeometry(geometry)
+                            }
+                        )
+                    }
                 }
             )
         }

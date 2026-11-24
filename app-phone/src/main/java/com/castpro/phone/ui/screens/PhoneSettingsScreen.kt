@@ -119,9 +119,52 @@ fun PhoneSettingsScreen(
             }
         }
 
-        // 5. Switches (Overlay, WakeLock, WebServer)
+        // 5. Audio mode
+        SettingsSectionCard(title = "Audio Source", icon = Icons.Default.VolumeUp) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                AudioMode.values().forEach { mode ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSettingsChanged(settings.copy(audioMode = mode)) }
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = settings.audioMode == mode,
+                            onClick = { onSettingsChanged(settings.copy(audioMode = mode)) },
+                            colors = RadioButtonDefaults.colors(
+                                selectedColor = GamerNeonGreen,
+                                unselectedColor = GamerTextSecondary
+                            )
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(mode.displayName, color = Color.White, fontSize = 13.sp)
+                            Text(
+                                when (mode) {
+                                    AudioMode.INTERNAL_GAME -> "Captures game/media audio (Android 10+)"
+                                    AudioMode.MICROPHONE -> "Uses the phone microphone (needs permission)"
+                                    AudioMode.MUTED -> "Video only"
+                                },
+                                color = GamerTextSecondary,
+                                fontSize = 10.sp
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 6. Switches (Auto-connect, Overlay, WakeLock, WebServer)
         SettingsSectionCard(title = "Advanced Enhancements", icon = Icons.Default.Tune) {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                SettingSwitchRow(
+                    title = "Automatic TV Connection",
+                    subtitle = "Select the first TV found and reconnect automatically after a drop",
+                    checked = settings.autoConnect,
+                    onCheckedChange = { onSettingsChanged(settings.copy(autoConnect = it)) }
+                )
+                HorizontalDivider(color = GamerCardBorder.copy(alpha = 0.5f))
                 SettingSwitchRow(
                     title = "In-Game Floating Overlay HUD",
                     subtitle = "Shows live FPS & latency pill with quick pause/stop controls",

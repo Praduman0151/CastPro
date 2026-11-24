@@ -5,8 +5,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -27,16 +25,27 @@ import com.castpro.phone.ui.theme.*
 import com.castpro.phone.viewmodel.PhoneUiState
 import com.castpro.phone.viewmodel.StreamStatus
 
+private fun gamerStatusColor(state: PhoneUiState): Color = when {
+    state.status == StreamStatus.STREAMING && state.isReceiverConnected -> GamerNeonGreen
+    state.status == StreamStatus.ERROR -> Color(0xFFFF1744)
+    state.status == StreamStatus.CONNECTING || state.status == StreamStatus.STREAMING -> GamerAccent
+    state.status == StreamStatus.IDLE && state.connectionStatus == "Connected" -> GamerNeonGreen
+    else -> GamerTextSecondary
+}
+
 @Composable
 fun PhoneDashboardScreen(
     state: PhoneUiState,
     onToggleGamingMode: (Boolean) -> Unit,
     onToggleWebServer: (Boolean) -> Unit,
+    onToggleAutoConnect: (Boolean) -> Unit,
     onSelectReceiver: (DiscoveredReceiver) -> Unit,
     onManualIpChanged: (String) -> Unit,
     onRefreshDiscovery: () -> Unit,
+    onScanQrClicked: () -> Unit,
     onStartCastClicked: () -> Unit,
-    onStopCastClicked: () -> Unit
+    onStopCastClicked: () -> Unit,
+    onDismissError: () -> Unit = {}
 ) {
     val scrollState = rememberScrollState()
 
@@ -48,12 +57,187 @@ fun PhoneDashboardScreen(
             .verticalScroll(scrollState),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Active streaming HUD
         if (state.status == StreamStatus.STREAMING) {
             LatencyHud(metrics = state.metrics)
         }
 
-        // 1. Universal Web Browser Casting Card
+        Card(
+            colors = CardDefaults.cardColors(containerColor = GamerCardBg),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, gamerStatusColor(state), RoundedCornerShape(16.dp))
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("STATUS", color = GamerTextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    text = state.connectionStatus,
+                    color = gamerStatusColor(state),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
+        state.errorMessage?.let { message ->
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF3A1520)),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, Color(0xFFFF5252), RoundedCornerShape(12.dp))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFFF8A80))
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = message,
+                        color = Color(0xFFFFCDD2),
+                        fontSize = 12.sp,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(onClick = onDismissError, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = "Dismiss", tint = Color(0xFFFFCDD2))
+                    }
+                }
+            }
+        }
+
+        // 1. TV connection / automatic pairing
+        Card(
+            colors = CardDefaults.cardColors(containerColor = GamerCardBg),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(
+                    1.dp,
+                    if (state.isReceiverConnected) GamerNeonGreen.copy(alpha = 0.6f) else GamerAccent.copy(alpha = 0.4f),
+                    RoundedCornerShape(16.dp)
+                )
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(Icons.Default.Tv, contentDescription = null, tint = GamerAccent)
+                        Column {
+                            Text("TV Receiver", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            Text(
+                                text = state.connectionStatus,
+                                color = if (state.isReceiverConnected) GamerNeonGreen else GamerTextSecondary,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                    Switch(
+                        checked = state.settings.autoConnect,
+                        onCheckedChange = onToggleAutoConnect,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.Black,
+                            checkedTrackColor = GamerNeonGreen,
+                            uncheckedThumbColor = Color.Gray,
+                            uncheckedTrackColor = Color(0xFF21262D)
+                        )
+                    )
+                }
+
+                Text(
+                    text = if (state.settings.autoConnect) {
+                        "Auto-connect is on: the first TV found is selected for you."
+                    } else {
+                        "Auto-connect is off: tap a receiver below or scan its QR."
+                    },
+                    color = GamerTextSecondary,
+                    fontSize = 10.sp
+                )
+
+                val selected = state.selectedReceiver
+                if (selected != null) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFF0D1117), RoundedCornerShape(10.dp))
+                            .border(1.dp, Color(0xFF30363D), RoundedCornerShape(10.dp))
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(selected.deviceName, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text(
+                                "${selected.hostAddress}:${selected.port}",
+                                color = GamerAccent,
+                                fontSize = 12.sp
+                            )
+                        }
+                        Icon(Icons.Default.CastConnected, contentDescription = null, tint = GamerNeonGreen)
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFF0D1117), RoundedCornerShape(10.dp))
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (state.isScanning) {
+                            CircularProgressIndicator(
+                                color = GamerAccent,
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                        }
+                        Text(
+                            text = if (state.isScanning) "Looking for Cast Pro TV on your Wi-Fi…" else "No TV selected",
+                            color = GamerTextSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = onScanQrClicked,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(Icons.Default.QrCodeScanner, contentDescription = null, tint = GamerAccent, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Scan TV QR", color = Color.White, fontSize = 12.sp)
+                    }
+                    OutlinedButton(
+                        onClick = onRefreshDiscovery,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, tint = GamerAccent, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Refresh", color = Color.White, fontSize = 12.sp)
+                    }
+                }
+            }
+        }
+
+        // 2. Universal web receiver
         Card(
             colors = CardDefaults.cardColors(containerColor = GamerCardBg),
             shape = RoundedCornerShape(16.dp),
@@ -74,10 +258,10 @@ fun PhoneDashboardScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Icon(imageVector = Icons.Default.Language, contentDescription = null, tint = GamerAccent)
+                        Icon(Icons.Default.Language, contentDescription = null, tint = GamerAccent)
                         Column {
                             Text("Universal Web Receiver", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                            Text("Zero-install cast for PC, Mac, iPad & TV", color = GamerTextSecondary, fontSize = 11.sp)
+                            Text("Browser preview for PC, Mac, iPad & TV", color = GamerTextSecondary, fontSize = 11.sp)
                         }
                     }
                     Switch(
@@ -103,9 +287,18 @@ fun PhoneDashboardScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-                            Text("OPEN BROWSER AT:", color = GamerTextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                            Text(state.webServerUrl, color = GamerAccent, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                            Text("Any device on local Wi-Fi can view live stream", color = Color.Gray, fontSize = 10.sp)
+                            Text("OPEN IN A BROWSER:", color = GamerTextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                state.webServerUrl.ifBlank { "Detecting network…" },
+                                color = GamerAccent,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                "Starts when you tap Start Stream. No app needed.",
+                                color = Color.Gray,
+                                fontSize = 10.sp
+                            )
                         }
 
                         if (state.webQrBitmap != null) {
@@ -123,7 +316,7 @@ fun PhoneDashboardScreen(
             }
         }
 
-        // 2. Local TV Receivers Section
+        // 3. Discovered receivers
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -154,7 +347,12 @@ fun PhoneDashboardScreen(
                 ) {
                     Icon(Icons.Default.Tv, contentDescription = null, tint = GamerTextSecondary, modifier = Modifier.size(36.dp))
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text("Searching for Cast Pro TV receiver...", color = GamerTextSecondary, fontSize = 13.sp)
+                    Text(
+                        "No receiver yet. Open Cast Pro TV on the same Wi-Fi.",
+                        color = GamerTextSecondary,
+                        fontSize = 13.sp,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
                 }
             }
         } else {
@@ -205,7 +403,7 @@ fun PhoneDashboardScreen(
             }
         }
 
-        // 3. Direct TV IP Manual Connect
+        // 4. Manual address
         Card(
             colors = CardDefaults.cardColors(containerColor = GamerCardBg),
             shape = RoundedCornerShape(14.dp),
@@ -221,7 +419,7 @@ fun PhoneDashboardScreen(
                 OutlinedTextField(
                     value = state.manualIp,
                     onValueChange = onManualIpChanged,
-                    placeholder = { Text("e.g. 192.168.1.50 (shown on TV)", color = Color.Gray, fontSize = 12.sp) },
+                    placeholder = { Text("e.g. 192.168.1.50:8998 (shown on TV)", color = Color.Gray, fontSize = 12.sp) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
@@ -234,7 +432,7 @@ fun PhoneDashboardScreen(
             }
         }
 
-        // 4. Start / Stop Stream Action Button
+        // 5. Start / stop
         if (state.status == StreamStatus.STREAMING) {
             Button(
                 onClick = onStopCastClicked,
@@ -259,7 +457,8 @@ fun PhoneDashboardScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(54.dp),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(12.dp),
+                enabled = state.selectedReceiver != null || state.manualIp.isNotBlank() || state.settings.enableWebServer
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -267,7 +466,11 @@ fun PhoneDashboardScreen(
                 ) {
                     Icon(Icons.Default.SportsEsports, contentDescription = null, tint = Color.Black)
                     Text(
-                        if (state.manualIp.isNotBlank()) "Start Stream to TV & Web" else "Start Web Cast Only",
+                        if (state.selectedReceiver != null || state.manualIp.isNotBlank()) {
+                            "Start Stream to TV"
+                        } else {
+                            "Start Web Cast Only"
+                        },
                         color = Color.Black,
                         fontWeight = FontWeight.Bold,
                         fontSize = 16.sp

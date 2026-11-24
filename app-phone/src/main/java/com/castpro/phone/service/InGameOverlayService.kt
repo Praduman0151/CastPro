@@ -14,21 +14,33 @@ import android.view.*
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.core.content.ContextCompat
+import com.castpro.core.common.model.CastSessionBus
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 class InGameOverlayService : Service() {
     private var windowManager: WindowManager? = null
     private var overlayView: View? = null
+    private var statsText: TextView? = null
+    private var muteButton: TextView? = null
     private var isPaused = false
     private var isMuted = false
+    private val overlayScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     companion object {
         const val ACTION_SHOW = "com.castpro.phone.overlay.SHOW"
         const val ACTION_HIDE = "com.castpro.phone.overlay.HIDE"
         const val ACTION_UPDATE_STATS = "com.castpro.phone.overlay.UPDATE_STATS"
+        const val ACTION_SET_MUTED = "com.castpro.phone.overlay.SET_MUTED"
 
         const val EXTRA_LATENCY_MS = "extra_latency_ms"
         const val EXTRA_FPS = "extra_fps"
+        const val EXTRA_MUTED = "extra_muted"
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -36,6 +48,15 @@ class InGameOverlayService : Service() {
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        overlayScope.launch {
+            CastSessionBus.state.collect { telemetry ->
+                updateStats(
+                    latencyMs = 0f,
+                    fps = telemetry.currentFps,
+                    connected = telemetry.isReceiverConnected
+                )
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -45,7 +66,11 @@ class InGameOverlayService : Service() {
             ACTION_UPDATE_STATS -> {
                 val latency = intent.getFloatExtra(EXTRA_LATENCY_MS, 0f)
                 val fps = intent.getIntExtra(EXTRA_FPS, 60)
-                updateStats(latency, fps)
+                updateStats(latency, fps, connected = true)
+            }
+            ACTION_SET_MUTED -> {
+                isMuted = intent.getBooleanExtra(EXTRA_MUTED, false)
+                muteButton?.text = if (isMuted) "🔇" else "🔊"
             }
         }
         return START_NOT_STICKY
@@ -104,7 +129,7 @@ class InGameOverlayService : Service() {
         // 2. Latency & FPS Text
         val statsText = TextView(this).apply {
             id = View.generateViewId()
-            text = "24ms • 60fps"
+            text = "LIVE • 60fps"
             setTextColor(Color.WHITE)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             typeface = android.graphics.Typeface.MONOSPACE
@@ -115,6 +140,7 @@ class InGameOverlayService : Service() {
                 marginEnd = dpToPx(12)
             }
         }
+        this.statsText = statsText
         rootLayout.addView(statsText)
 
         // 3. Audio Mute Button
@@ -131,8 +157,12 @@ class InGameOverlayService : Service() {
             setOnClickListener {
                 isMuted = !isMuted
                 text = if (isMuted) "🔇" else "🔊"
+                startService(Intent(this@InGameOverlayService, ScreenCaptureService::class.java).apply {
+                    action = ScreenCaptureService.ACTION_TOGGLE_MUTE
+                })
             }
         }
+        this.muteButton = muteBtn
         rootLayout.addView(muteBtn)
 
         // 4. Stop Cast Button (Red X)
@@ -203,15 +233,14 @@ class InGameOverlayService : Service() {
         }
     }
 
-    private fun updateStats(latencyMs: Float, fps: Int) {
-        val root = overlayView as? LinearLayout ?: return
-        for (i in 0 until root.childCount) {
-            val child = root.getChildAt(i)
-            if (child is TextView && child.text.contains("ms")) {
-                child.text = "${latencyMs.toInt()}ms • ${fps}fps"
-                break
-            }
+    private fun updateStats(latencyMs: Float, fps: Int, connected: Boolean = true) {
+        val view = statsText ?: return
+        val state = when {
+            !connected -> "WAIT"
+            fps > 0 -> "${fps}fps"
+            else -> "LIVE"
         }
+        view.text = if (latencyMs > 0f) "${latencyMs.toInt()}ms • $state" else state
     }
 
     private fun hideOverlay() {
@@ -222,6 +251,8 @@ class InGameOverlayService : Service() {
                 e.printStackTrace()
             } finally {
                 overlayView = null
+                statsText = null
+                muteButton = null
             }
         }
         stopSelf()
@@ -229,6 +260,7 @@ class InGameOverlayService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        overlayScope.cancel()
         hideOverlay()
     }
 

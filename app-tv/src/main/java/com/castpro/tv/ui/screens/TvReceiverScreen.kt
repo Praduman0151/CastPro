@@ -8,11 +8,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CastConnected
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -23,7 +21,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.castpro.tv.render.TvSurfaceRenderer
+import com.castpro.core.common.protocol.Constants
 import com.castpro.tv.ui.components.TvGamerHudOverlay
 import com.castpro.tv.ui.components.TvNeonBlue
 import com.castpro.tv.ui.components.TvNeonGreen
@@ -37,9 +35,11 @@ fun TvReceiverScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(Color.Black),
+        contentAlignment = Alignment.Center
     ) {
-        // Hardware Video Rendering Surface
+        // The decoder renders into this surface. It keeps the stream's aspect
+        // ratio so a 16:9 phone does not stretch across a 4:3 panel.
         AndroidView(
             factory = { context ->
                 SurfaceView(context).apply {
@@ -50,93 +50,122 @@ fun TvReceiverScreen(
                     onSurfaceCreated(this)
                 }
             },
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+                .fillMaxSize()
+                .aspectRatio(state.aspectRatio.coerceIn(0.5f, 3f))
         )
 
         if (!state.isStreaming) {
-            // Standby / Pairing Screen
+            // Standby / pairing screen
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color(0xFF070B11)),
                 contentAlignment = Alignment.Center
             ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(20.dp),
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(40.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .background(Color(0xFF111824), RoundedCornerShape(24.dp))
                         .border(2.dp, TvNeonGreen.copy(alpha = 0.4f), RoundedCornerShape(24.dp))
-                        .padding(48.dp)
+                        .padding(horizontal = 44.dp, vertical = 36.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Tv,
-                        contentDescription = null,
-                        tint = TvNeonGreen,
-                        modifier = Modifier.size(72.dp)
-                    )
-
-                    Text(
-                        text = "Cast Pro TV Receiver",
-                        color = Color.White,
-                        fontSize = 32.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    Text(
-                        text = "Offline Ultra-Low Latency Display • Gaming Mode Ready",
-                        color = Color.Gray,
-                        fontSize = 16.sp
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    if (state.qrCodeBitmap != null) {
-                        Image(
-                            bitmap = state.qrCodeBitmap.asImageBitmap(),
-                            contentDescription = "Scan with Cast Pro Phone to Pair",
-                            modifier = Modifier
-                                .size(180.dp)
-                                .background(Color.White, RoundedCornerShape(12.dp))
-                                .padding(8.dp)
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                        modifier = Modifier.width(320.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Tv,
+                            contentDescription = null,
+                            tint = TvNeonGreen,
+                            modifier = Modifier.size(64.dp)
                         )
                         Text(
-                            text = "Scan QR code with Cast Pro Phone app",
-                            color = Color.LightGray,
+                            text = "Cast Pro TV Receiver",
+                            color = Color.White,
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Offline ultra-low latency display",
+                            color = Color.Gray,
                             fontSize = 14.sp
                         )
+                        if (state.qrCodeBitmap != null) {
+                            Image(
+                                bitmap = state.qrCodeBitmap.asImageBitmap(),
+                                contentDescription = "Scan with the Cast Pro phone app",
+                                modifier = Modifier
+                                    .size(210.dp)
+                                    .background(Color.White, RoundedCornerShape(12.dp))
+                                    .padding(8.dp)
+                            )
+                            Text(
+                                text = "Scan with the Cast Pro phone app",
+                                color = Color.LightGray,
+                                fontSize = 13.sp
+                            )
+                        } else {
+                            Text(
+                                text = "Connect the TV to Wi-Fi or Ethernet to show a pairing code",
+                                color = Color(0xFFFFB300),
+                                fontSize = 12.sp,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                        }
                     }
 
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.width(330.dp)
                     ) {
-                        CircularProgressIndicator(color = TvNeonGreen, modifier = Modifier.size(24.dp), strokeWidth = 2.5.dp)
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(
+                                color = TvNeonGreen,
+                                modifier = Modifier.size(22.dp),
+                                strokeWidth = 2.5.dp
+                            )
+                            Text(
+                                text = if (state.isServerRunning) "Listening for phone" else "Starting receiver…",
+                                color = TvNeonGreen,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
                         Text(
-                            text = "Listening for Sender: ${state.localIpAddress}:8998",
+                            text = "TV address: ${state.localIpAddress}:${Constants.DEFAULT_STREAM_PORT}",
                             color = TvNeonBlue,
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.Medium
+                            fontSize = 16.sp
                         )
-                    }
+                        Text(
+                            text = "Phone and TV must be on the same Wi-Fi or phone hotspot.",
+                            color = Color.Gray,
+                            fontSize = 12.sp
+                        )
 
-                    Text(
-                        text = "Connect phone to same Wi-Fi or Phone Hotspot",
-                        color = Color.DarkGray,
-                        fontSize = 14.sp
-                    )
+                        state.connectionError?.let { error ->
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = error,
+                                color = Color(0xFFFF8A80),
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
                 }
             }
-        } else {
-            // Active Fullscreen HUD Overlay
-            if (state.showHudOverlay) {
-                TvGamerHudOverlay(
-                    metrics = state.metrics,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(24.dp)
-                )
-            }
+        } else if (state.showHudOverlay) {
+            TvGamerHudOverlay(
+                metrics = state.metrics,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(24.dp)
+            )
         }
     }
 }
