@@ -241,11 +241,12 @@ class ScreenCaptureService : Service() {
             appendStatus("applyLiveConfig ${width}x$height@${fps}fps ${bitrate / 1_000_000}M $codec")
             Log.i(tag, "Applying live quality: ${next.width}x${next.height}@${next.fps} $codec")
             try {
-                // Stop the old pipeline before touching the config packet.
+                // Do NOT create a second VirtualDisplay from the same
+                // MediaProjection: Android rejects that even after release().
+                // Keep the display alive and swap the encoder's input surface.
+                val oldDisplay = virtualDisplay
                 encoder?.stop()
                 encoder = null
-                virtualDisplay?.release()
-                virtualDisplay = null
 
                 currentConfig = next
                 currentStreamConfigPacket = StreamConfigPacket(
@@ -277,21 +278,29 @@ class ScreenCaptureService : Service() {
                 val inputSurface = enc.prepare()
                 enc.start()
                 encoder = enc
-                virtualDisplay = project.createVirtualDisplay(
-                    "CastPro-Display",
-                    width,
-                    height,
-                    dpi,
-                    DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                    inputSurface,
-                    null,
-                    null
-                )
-                if (virtualDisplay == null) {
-                    throw IllegalStateException("Could not resize the capture display")
+                if (oldDisplay == null) {
+                    virtualDisplay = project.createVirtualDisplay(
+                        "CastPro-Display",
+                        width,
+                        height,
+                        dpi,
+                        DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                        inputSurface,
+                        null,
+                        null
+                    )
+                    if (virtualDisplay == null) {
+                        throw IllegalStateException("Could not create the capture display")
+                    }
+                } else {
+                    // Same MediaProjection, new encoder surface. This is the
+                    // only supported way to change codec/resolution live.
+                    oldDisplay.setSurface(inputSurface)
+                    virtualDisplay = oldDisplay
                 }
                 sendHeartbeat(tcp)
                 enc.requestKeyFrame()
+                CastSessionBus.setError(null)
                 updateNotification("Streaming ${width}×${height} @ ${fps}FPS • quality updated")
                 appendStatus("applyLiveConfig done")
             } catch (e: Exception) {
