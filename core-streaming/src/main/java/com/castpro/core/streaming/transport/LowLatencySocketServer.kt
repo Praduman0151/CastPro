@@ -22,6 +22,7 @@ class LowLatencySocketServer(
     private val onAudioReceived: (ByteArray, Int, Int) -> Unit = { _, _, _ -> },
     private val onGeometryReceived: (GeometryPacket) -> Unit = {},
     private val onStreamConfigReceived: (StreamConfigPacket) -> Unit = {},
+    private val onHeartbeatReceived: (Long) -> Unit = {},
     private val onClientConnected: (String) -> Unit,
     private val onClientDisconnected: () -> Unit,
     private val onError: (String) -> Unit = {}
@@ -134,7 +135,7 @@ class LowLatencySocketServer(
                 Constants.TYPE_STREAM_CONFIG -> runCatching {
                     StreamConfigPacket.fromByteArray(payload)?.let(onStreamConfigReceived)
                 }
-                Constants.TYPE_HEARTBEAT -> Unit
+                Constants.TYPE_HEARTBEAT -> runCatching { onHeartbeatReceived(header.timestampNano) }
                 else -> Log.d(tag, "Ignoring packet type ${header.type}")
             }
         }

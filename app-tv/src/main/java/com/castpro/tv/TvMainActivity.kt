@@ -7,6 +7,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.compose.runtime.collectAsState
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.runtime.getValue
 import com.castpro.core.common.model.StreamConfig
 import com.castpro.core.streaming.audio.TvAudioPlayer
@@ -24,6 +27,9 @@ class TvMainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         installTvCrashHandler(this)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Draw behind system bars so the video really reaches the panel edges.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).hide(WindowInsetsCompat.Type.systemBars())
 
         val player = TvAudioPlayer().apply { start() }
         audioPlayer = player
@@ -45,7 +51,8 @@ class TvMainActivity : ComponentActivity() {
                             // the receiver usable but show what happened.
                             android.util.Log.e("TvMainActivity", message)
                             runOnUiThread { viewModel.reportError(message) }
-                        }
+                        },
+                        clockOffsetProvider = { viewModel.currentClockOffsetNs() }
                     )
                     surfaceRenderer = renderer
 
@@ -78,7 +85,9 @@ class TvMainActivity : ComponentActivity() {
                                 player.playAudioChunk(data, offset, length)
                             },
                             onGeometryReceived = { geometry ->
-                                runOnUiThread { viewModel.updateAspectRatio(geometry.aspectRatio) }
+                                // Rotation metadata only. Never resize the
+                                // surface from it: the encoded stream decides
+                                // the display geometry, not the phone sensor.
                                 surfaceRenderer?.onGeometry(geometry)
                             }
                         )

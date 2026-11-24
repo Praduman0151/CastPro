@@ -61,6 +61,22 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
     private var retryJob: Job? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
+    /** Clock difference between TV and phone, learned from heartbeat packets. */
+    @Volatile
+    private var clockOffsetNs: Long = 0L
+
+    fun currentClockOffsetNs(): Long = clockOffsetNs
+
+    /**
+     * The phone stamps heartbeats with its wall clock. Their arrival time lets
+     * the TV subtract the devices' clock skew from the video timestamps, which
+     * is required for a meaningful one-way latency figure.
+     */
+    fun noteHeartbeat(senderTimestampNs: Long) {
+        val receiveNs = System.currentTimeMillis() * 1_000_000L
+        clockOffsetNs = receiveNs - senderTimestampNs - ASSUMED_ONE_WAY_NS
+    }
+
     private var onStreamConfig: ((StreamConfigPacket) -> Unit)? = null
     private var onFrame: ((ByteArray, Int, Int, Long, Boolean, Boolean, Boolean) -> Unit)? = null
     private var onAudio: ((ByteArray, Int, Int) -> Unit)? = null
@@ -179,6 +195,9 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
             onStreamConfigReceived = { config ->
                 applyStreamConfig(config)
             },
+            onHeartbeatReceived = { senderTimestampNs ->
+                noteHeartbeat(senderTimestampNs)
+            },
             onClientConnected = { ip ->
                 retryJob?.cancel()
                 _uiState.update {
@@ -261,5 +280,10 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
             networkCallback?.let { runCatching { manager.unregisterNetworkCallback(it) } }
         }
         networkCallback = null
+    }
+
+    companion object {
+        /** Typical LAN delivery time used to separate clock skew from latency. */
+        private const val ASSUMED_ONE_WAY_NS = 2_000_000L
     }
 }

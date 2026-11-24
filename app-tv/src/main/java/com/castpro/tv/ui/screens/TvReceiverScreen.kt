@@ -40,8 +40,10 @@ fun TvReceiverScreen(
             .background(Color.Black),
         contentAlignment = Alignment.Center
     ) {
-        // The decoder renders into this surface. It keeps the stream's aspect
-        // ratio so a 16:9 phone does not stretch across a 4:3 panel.
+        // The decoder is configured from the phone's StreamConfig (16:9 by
+        // default), so the surface must always match the TV window exactly.
+        // Sizing it from the phone's live geometry made it portrait (e.g.
+        // 1920x3840 on a 1080p TV) and left most of the panel black.
         AndroidView(
             factory = { context ->
                 SurfaceView(context).apply {
@@ -52,9 +54,7 @@ fun TvReceiverScreen(
                     onSurfaceCreated(this)
                 }
             },
-            modifier = Modifier
-                .fillMaxSize()
-                .aspectRatio(state.aspectRatio.coerceIn(0.5f, 3f))
+            modifier = Modifier.fillMaxSize()
         )
 
         if (!state.isStreaming) {

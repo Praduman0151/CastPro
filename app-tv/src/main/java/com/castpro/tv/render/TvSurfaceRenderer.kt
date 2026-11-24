@@ -11,7 +11,8 @@ class TvSurfaceRenderer(
     private val surfaceView: SurfaceView,
     initialConfig: StreamConfig,
     private val onMetricsUpdated: (LatencyMetrics) -> Unit,
-    private val onError: (String) -> Unit = {}
+    private val onError: (String) -> Unit = {},
+    private val clockOffsetProvider: () -> Long = { 0L }
 ) : SurfaceHolder.Callback {
 
     private var config: StreamConfig = initialConfig
@@ -29,7 +30,8 @@ class TvSurfaceRenderer(
             initialConfig = config,
             surface = holder.surface,
             onMetricsUpdated = onMetricsUpdated,
-            onError = onError
+            onError = onError,
+            clockOffsetProvider = clockOffsetProvider
         ).apply { start() }
     }
 

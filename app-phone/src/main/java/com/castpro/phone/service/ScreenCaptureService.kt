@@ -46,6 +46,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
@@ -79,6 +80,7 @@ class ScreenCaptureService : Service() {
     private var hasConnectedOnce = false
     private var lastTransportError: String? = null
     private var connectionTimeoutJob: Job? = null
+    private var heartbeatJob: Job? = null
 
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
@@ -336,6 +338,7 @@ class ScreenCaptureService : Service() {
                     }
                     transport = tcp
                     tcp.start()
+                    startHeartbeatLoop(tcp)
 
                     try {
                         val enc = HardwareScreenEncoder(
@@ -445,6 +448,9 @@ class ScreenCaptureService : Service() {
                 currentReceiverName.takeIf { it.isNotBlank() }
             )
             sendStreamConfig()
+            // Calibrate the TV's clock offset immediately, before the first
+            // latency sample is reported.
+            transport?.let { sendHeartbeat(it) }
             encoder?.requestKeyFrame()
             val name = currentReceiverName.takeIf { it.isNotBlank() }
                 ?: currentHost.takeIf { it.isNotBlank() }
@@ -498,6 +504,32 @@ class ScreenCaptureService : Service() {
     private fun failStart(message: String) {
         Log.e(tag, "Screen casting could not start: $message")
         stopStreaming(failure = message)
+    }
+
+    /**
+     * The TV learns the phone/TV clock skew from these packets so its HUD can
+     * report a real one-way latency instead of a value distorted by seconds of
+     * wall-clock difference between the two devices.
+     */
+    private fun startHeartbeatLoop(activeTransport: StreamTransport) {
+        heartbeatJob?.cancel()
+        heartbeatJob = serviceScope.launch {
+            while (isActive && started.get() && !stopping.get() && transport === activeTransport) {
+                sendHeartbeat(activeTransport)
+                delay(1_000)
+            }
+        }
+    }
+
+    private fun sendHeartbeat(target: StreamTransport = transport ?: return) {
+        val header = PacketHeader(
+            type = Constants.TYPE_HEARTBEAT,
+            flags = 0,
+            sequenceNumber = 0,
+            timestampNano = System.currentTimeMillis() * 1_000_000L,
+            payloadLength = 0
+        )
+        target.send(header, ByteArray(0))
     }
 
     private fun sendStreamConfig() {
@@ -581,6 +613,8 @@ class ScreenCaptureService : Service() {
             lastTransportError = null
             connectionTimeoutJob?.cancel()
             connectionTimeoutJob = null
+            heartbeatJob?.cancel()
+            heartbeatJob = null
             CastSessionBus.stop(failure)
             if (failure != null) {
                 CastSessionBus.setConnectionState(

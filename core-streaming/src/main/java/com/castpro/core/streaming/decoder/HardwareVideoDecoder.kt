@@ -20,7 +20,8 @@ class HardwareVideoDecoder(
     initialConfig: StreamConfig,
     private val surface: Surface,
     private val onMetricsUpdated: (LatencyMetrics) -> Unit,
-    private val onError: (String) -> Unit = {}
+    private val onError: (String) -> Unit = {},
+    private val clockOffsetProvider: () -> Long = { 0L }
 ) {
     private val tag = "HardwareVideoDecoder"
     private val lock = Any()
@@ -215,8 +216,13 @@ class HardwareVideoDecoder(
                 val elapsed = (nowMs - lastFpsTimestamp).coerceAtLeast(1)
                 val fps = ((frameCount * 1_000L) / elapsed).toInt()
                 val bitrate = (bytesInWindow * 8f) / elapsed / 1_000f
-                val latencyMs = ((System.currentTimeMillis() * 1_000_000L - timestampNano)
-                    .coerceIn(0L, 1_000_000_000L) / 1_000_000f)
+                // Remove the TV/phone wall-clock skew learned from heartbeats;
+                // raw cross-device timestamps are meaningless when the two
+                // clocks differ by seconds.
+                val nowNs = nowMs * 1_000_000L
+                val latencyNs = (nowNs - timestampNano - clockOffsetProvider())
+                    .coerceIn(0L, 1_000_000_000L)
+                val latencyMs = latencyNs / 1_000_000f
                 onMetricsUpdated(
                     LatencyMetrics(
                         currentFps = fps,
