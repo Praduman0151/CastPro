@@ -43,7 +43,9 @@ class LowLatencySocketServer(
         } catch (e: Exception) {
             isRunning.set(false)
             Log.e(tag, "Could not bind receiver port $port", e)
-            onError("Receiver port $port is busy. Close the other Cast Pro window and try again.")
+            runCatching {
+                onError("Receiver port $port is busy. Close the other Cast Pro window and try again.")
+            }
             return
         }
 
@@ -56,7 +58,7 @@ class LowLatencySocketServer(
                     clientSocket = client
                     val clientIp = client.inetAddress.hostAddress ?: "Unknown"
                     Log.i(tag, "Client connected: $clientIp")
-                    onClientConnected(clientIp)
+                    runCatching { onClientConnected(clientIp) }
 
                     try {
                         handleClientStream(client.getInputStream())
@@ -65,12 +67,12 @@ class LowLatencySocketServer(
                     } finally {
                         runCatching { client.close() }
                         clientSocket = null
-                        onClientDisconnected()
+                        runCatching { onClientDisconnected() }
                     }
                 } catch (e: Exception) {
                     if (isRunning.get()) {
                         Log.e(tag, "Server socket error", e)
-                        onError(e.message ?: "Receiver socket error")
+                        runCatching { onError(e.message ?: "Receiver socket error") }
                     }
                     // A transient accept failure must not stop the listener.
                     if (isRunning.get()) {
@@ -123,9 +125,15 @@ class LowLatencySocketServer(
                         Log.w(tag, "Dropping video packet ${header.sequenceNumber}", e)
                     }
                 }
-                Constants.TYPE_AUDIO_DATA -> onAudioReceived(payload, 0, header.payloadLength)
-                Constants.TYPE_GEOMETRY -> GeometryPacket.fromByteArray(payload)?.let(onGeometryReceived)
-                Constants.TYPE_STREAM_CONFIG -> StreamConfigPacket.fromByteArray(payload)?.let(onStreamConfigReceived)
+                Constants.TYPE_AUDIO_DATA -> runCatching {
+                    onAudioReceived(payload, 0, header.payloadLength)
+                }
+                Constants.TYPE_GEOMETRY -> runCatching {
+                    GeometryPacket.fromByteArray(payload)?.let(onGeometryReceived)
+                }
+                Constants.TYPE_STREAM_CONFIG -> runCatching {
+                    StreamConfigPacket.fromByteArray(payload)?.let(onStreamConfigReceived)
+                }
                 Constants.TYPE_HEARTBEAT -> Unit
                 else -> Log.d(tag, "Ignoring packet type ${header.type}")
             }

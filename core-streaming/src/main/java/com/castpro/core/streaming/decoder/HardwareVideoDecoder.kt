@@ -149,13 +149,18 @@ class HardwareVideoDecoder(
         isKeyframe: Boolean = false
     ) {
         synchronized(lock) {
+            // The sender marks IDRs; the byte scan is only a fallback for
+            // older senders that emit Annex-B start codes.
+            val keyFrame = isKeyframe || isKeyFrame(data, offset, length)
+            if (mediaCodec == null && keyFrame && surface.isValid) {
+                // A previous decode error stopped the codec. Rebuild it on the
+                // next IDR instead of leaving the TV on a frozen frame.
+                startCodec()
+            }
             val codec = mediaCodec ?: return
             if (!running.get()) return
 
             try {
-                // The sender marks IDRs; the byte scan is only a fallback for
-                // older senders that emit Annex-B start codes.
-                val keyFrame = isKeyframe || isKeyFrame(data, offset, length)
                 // Parameter sets are safe (and necessary) before the first IDR.
                 // Queue them even while waiting, but keep waiting for a real IDR.
                 if (waitingForKeyframe && !isCodecConfig && !keyFrame) return
@@ -175,9 +180,12 @@ class HardwareVideoDecoder(
                 bytesInWindow += bytesToQueue
 
                 drainOutput(codec, timestampNano, isGamingMode)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 Log.e(tag, "Decode error", e)
-                runCatching { mediaCodec?.flush() }
+                // Once MediaCodec throws, its state is not trustworthy. Stop it
+                // and rebuild from the next IDR instead of queuing into a dead
+                // decoder for the rest of the session.
+                stopCodec()
                 waitingForKeyframe = true
                 onError(e.message ?: "Video decoder error")
             }

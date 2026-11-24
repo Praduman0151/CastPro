@@ -18,7 +18,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 class NsdHelper(context: Context) {
     private val tag = "NsdHelper"
     private val appContext = context.applicationContext
-    private val nsdManager = appContext.getSystemService(Context.NSD_SERVICE) as NsdManager
+    // Some TV firmwares omit the NSD service entirely; an unchecked cast here
+    // used to kill the receiver during ViewModel construction.
+    private val nsdManager = appContext.getSystemService(Context.NSD_SERVICE) as? NsdManager
     private val wifiManager = appContext.applicationContext
         .getSystemService(Context.WIFI_SERVICE) as? WifiManager
 
@@ -34,6 +36,10 @@ class NsdHelper(context: Context) {
         onRegistered: (String) -> Unit,
         onError: (String) -> Unit = {}
     ) {
+        val manager = nsdManager ?: run {
+            onError("This device does not support TV discovery; use the TV's IP address")
+            return
+        }
         unregister()
         acquireMulticastLock()
 
@@ -62,7 +68,7 @@ class NsdHelper(context: Context) {
         }
 
         try {
-            nsdManager.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, registrationListener)
+            manager.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, registrationListener)
         } catch (e: Exception) {
             Log.e(tag, "Failed to register NSD service", e)
             onError(e.message ?: "Could not register TV discovery")
@@ -73,6 +79,7 @@ class NsdHelper(context: Context) {
         onReceiverFound: (DiscoveredReceiver) -> Unit,
         onReceiverLost: (String) -> Unit = {}
     ) {
+        val manager = nsdManager ?: return
         stopDiscovery()
         acquireMulticastLock()
         discovering.set(true)
@@ -90,7 +97,7 @@ class NsdHelper(context: Context) {
                     if (!resolving.add(key)) return
                 }
                 try {
-                    nsdManager.resolveService(service, object : NsdManager.ResolveListener {
+                    manager.resolveService(service, object : NsdManager.ResolveListener {
                         override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
                             Log.w(tag, "Resolve failed for ${serviceInfo.serviceName}: $errorCode")
                             synchronized(resolving) { resolving.remove(key) }
@@ -134,7 +141,7 @@ class NsdHelper(context: Context) {
         }
 
         try {
-            nsdManager.discoverServices(Constants.NSD_SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener)
+            manager.discoverServices(Constants.NSD_SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener)
         } catch (e: Exception) {
             Log.e(tag, "Failed to start discovery", e)
             discovering.set(false)
@@ -145,7 +152,7 @@ class NsdHelper(context: Context) {
         val listener = discoveryListener ?: return
         discoveryListener = null
         try {
-            nsdManager.stopServiceDiscovery(listener)
+            nsdManager?.stopServiceDiscovery(listener)
         } catch (e: Exception) {
             Log.w(tag, "Could not stop discovery", e)
         } finally {
@@ -158,7 +165,7 @@ class NsdHelper(context: Context) {
         val listener = registrationListener ?: return
         registrationListener = null
         try {
-            nsdManager.unregisterService(listener)
+            nsdManager?.unregisterService(listener)
         } catch (e: Exception) {
             Log.w(tag, "Could not unregister service", e)
         }

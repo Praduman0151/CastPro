@@ -39,7 +39,8 @@ data class TvUiState(
     val metrics: LatencyMetrics = LatencyMetrics(),
     val showHudOverlay: Boolean = true,
     val connectionError: String? = null,
-    val isServerRunning: Boolean = false
+    val isServerRunning: Boolean = false,
+    val lastCrash: String? = null
 )
 
 class TvReceiverViewModel(application: Application) : AndroidViewModel(application) {
@@ -66,7 +67,15 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
     private var onGeometry: ((GeometryPacket) -> Unit)? = null
 
     init {
-        _uiState.update { it.copy(serviceName = defaultServiceName()) }
+        _uiState.update {
+            it.copy(
+                serviceName = defaultServiceName(),
+                lastCrash = com.castpro.tv.tvCrashLogFile(app)
+                    .takeIf { file -> file.exists() }
+                    ?.readText()
+                    ?.take(1_500)
+            )
+        }
         refreshNetwork()
         registerNsd()
         udpResponder.start()
@@ -219,6 +228,11 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
 
     fun updateMetrics(metrics: LatencyMetrics) {
         _uiState.update { it.copy(metrics = metrics) }
+    }
+
+    fun dismissCrashReport() {
+        com.castpro.tv.tvCrashLogFile(app).delete()
+        _uiState.update { it.copy(lastCrash = null) }
     }
 
     /** Keeps decoder failures visible on the TV instead of only in logcat. */

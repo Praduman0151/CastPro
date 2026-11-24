@@ -22,6 +22,7 @@ class TvMainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        installTvCrashHandler(this)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         val player = TvAudioPlayer().apply { start() }
@@ -31,6 +32,7 @@ class TvMainActivity : ComponentActivity() {
             val state by viewModel.uiState.collectAsState()
             TvReceiverScreen(
                 state = state,
+                onDismissCrash = { viewModel.dismissCrashReport() },
                 onSurfaceCreated = { surfaceView ->
                     val renderer = TvSurfaceRenderer(
                         surfaceView = surfaceView,
