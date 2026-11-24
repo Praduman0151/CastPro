@@ -227,6 +227,9 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
             },
             onError = { message ->
                 _uiState.update { it.copy(connectionError = message, isServerRunning = false) }
+                // Always close the old listener before retrying, otherwise its
+                // bound port survives and every retry fails with EADDRINUSE.
+                socketServer?.stop()
                 socketServer = null
                 retryJob?.cancel()
                 retryJob = viewModelScope.launch {
