@@ -83,6 +83,19 @@ fun PhoneDashboardScreen(
             }
         }
 
+        if (state.status == StreamStatus.STREAMING) {
+            val settings = state.settings
+            Text(
+                text = "Quality: ${settings.resolution.width}x${settings.resolution.height} · " +
+                    "${settings.framerate.fps} fps · ${settings.codec.name} · " +
+                    "${String.format("%.1f", settings.bitrate.bps / 1_000_000f)} Mb/s",
+                color = GamerAccent,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(horizontal = 4.dp)
+            )
+        }
+
         state.errorMessage?.let { message ->
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF3A1520)),

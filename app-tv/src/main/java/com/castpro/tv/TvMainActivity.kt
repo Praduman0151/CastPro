@@ -39,6 +39,10 @@ class TvMainActivity : ComponentActivity() {
             TvReceiverScreen(
                 state = state,
                 onDismissCrash = { viewModel.dismissCrashReport() },
+                onDisplayModeChanged = { mode -> viewModel.setDisplayMode(mode) },
+                onColorFilterChanged = { filter -> viewModel.setColorFilter(filter) },
+                onCycleDisplayMode = { viewModel.cycleDisplayMode() },
+                onCycleColorFilter = { viewModel.cycleColorFilter() },
                 onSurfaceCreated = { surfaceView ->
                     val renderer = TvSurfaceRenderer(
                         surfaceView = surfaceView,

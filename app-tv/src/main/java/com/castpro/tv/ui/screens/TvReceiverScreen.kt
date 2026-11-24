@@ -2,6 +2,7 @@ package com.castpro.tv.ui.screens
 
 import android.view.SurfaceView
 import android.view.ViewGroup
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -18,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -26,24 +28,50 @@ import com.castpro.core.common.protocol.Constants
 import com.castpro.tv.ui.components.TvGamerHudOverlay
 import com.castpro.tv.ui.components.TvNeonBlue
 import com.castpro.tv.ui.components.TvNeonGreen
+import com.castpro.tv.viewmodel.TvColorFilter
+import com.castpro.tv.viewmodel.TvDisplayMode
 import com.castpro.tv.viewmodel.TvUiState
 
 @Composable
 fun TvReceiverScreen(
     state: TvUiState,
     onSurfaceCreated: (SurfaceView) -> Unit,
-    onDismissCrash: () -> Unit = {}
+    onDismissCrash: () -> Unit = {},
+    onDisplayModeChanged: (TvDisplayMode) -> Unit = {},
+    onColorFilterChanged: (TvColorFilter) -> Unit = {},
+    onCycleDisplayMode: () -> Unit = {},
+    onCycleColorFilter: () -> Unit = {}
 ) {
+    val tvAspect = 16f / 9f
+    val streamAspect = state.streamConfig.let { cfg ->
+        if (cfg.height > 0) cfg.width.toFloat() / cfg.height else tvAspect
+    }.coerceIn(0.4f, 3f)
+
+    // Keep the decoder surface inside the panel for Fit, but let Full/Stretch/
+    // Zoom use the whole window. Never derive this from phone sensor geometry.
+    val surfaceModifier = when (state.displayMode) {
+        TvDisplayMode.FIT -> Modifier
+            .fillMaxSize()
+            .aspectRatio(streamAspect)
+        TvDisplayMode.FULL -> Modifier.fillMaxSize()
+        TvDisplayMode.STRETCH -> {
+            val scaleX = if (streamAspect < tvAspect) tvAspect / streamAspect else 1f
+            val scaleY = if (streamAspect > tvAspect) streamAspect / tvAspect else 1f
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer(scaleX = scaleX, scaleY = scaleY, clip = true)
+        }
+        TvDisplayMode.ZOOM -> Modifier
+            .fillMaxSize()
+            .graphicsLayer(scaleX = 1.18f, scaleY = 1.18f, clip = true)
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black),
         contentAlignment = Alignment.Center
     ) {
-        // The decoder is configured from the phone's StreamConfig (16:9 by
-        // default), so the surface must always match the TV window exactly.
-        // Sizing it from the phone's live geometry made it portrait (e.g.
-        // 1920x3840 on a 1080p TV) and left most of the panel black.
         AndroidView(
             factory = { context ->
                 SurfaceView(context).apply {
@@ -54,8 +82,21 @@ fun TvReceiverScreen(
                     onSurfaceCreated(this)
                 }
             },
-            modifier = Modifier.fillMaxSize()
+            modifier = surfaceModifier
         )
+
+        // GPU-composited colour treatment. Placed above the video surface but
+        // below the HUD so telemetry stays readable.
+        if (state.isStreaming && state.colorFilter != TvColorFilter.STANDARD) {
+            val filter = state.colorFilter
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                drawRect(
+                    color = filter.tint ?: Color.Transparent,
+                    alpha = filter.alpha,
+                    blendMode = filter.blendMode
+                )
+            }
+        }
 
         if (!state.isStreaming) {
             // Standby / pairing screen
@@ -150,6 +191,47 @@ fun TvReceiverScreen(
                             fontSize = 12.sp
                         )
 
+                        Text(
+                            text = "DISPLAY MODE",
+                            color = TvNeonBlue,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            TvDisplayMode.values().forEach { mode ->
+                                TvChip(
+                                    label = mode.label,
+                                    selected = state.displayMode == mode,
+                                    onClick = { onDisplayModeChanged(mode) }
+                                )
+                            }
+                        }
+
+                        Text(
+                            text = "COLOR FILTER",
+                            color = TvNeonBlue,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            TvColorFilter.values().take(5).forEach { filter ->
+                                TvChip(
+                                    label = filter.label,
+                                    selected = state.colorFilter == filter,
+                                    onClick = { onColorFilterChanged(filter) }
+                                )
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            TvColorFilter.values().drop(5).forEach { filter ->
+                                TvChip(
+                                    label = filter.label,
+                                    selected = state.colorFilter == filter,
+                                    onClick = { onColorFilterChanged(filter) }
+                                )
+                            }
+                        }
+
                         state.connectionError?.let { error ->
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
@@ -182,10 +264,43 @@ fun TvReceiverScreen(
         } else if (state.showHudOverlay) {
             TvGamerHudOverlay(
                 metrics = state.metrics,
+                displayMode = state.displayMode,
+                colorFilter = state.colorFilter,
+                onCycleDisplayMode = onCycleDisplayMode,
+                onCycleColorFilter = onCycleColorFilter,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(24.dp)
             )
         }
+    }
+}
+
+@Composable
+private fun TvChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .background(
+                if (selected) TvNeonGreen.copy(alpha = 0.22f) else Color(0xFF161B22),
+                RoundedCornerShape(6.dp)
+            )
+            .border(
+                1.dp,
+                if (selected) TvNeonGreen else Color(0xFF30363D),
+                RoundedCornerShape(6.dp)
+            )
+            .clickable { onClick() }
+            .padding(horizontal = 8.dp, vertical = 5.dp)
+    ) {
+        Text(
+            text = label,
+            color = if (selected) TvNeonGreen else Color.LightGray,
+            fontSize = 11.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+        )
     }
 }

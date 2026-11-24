@@ -34,6 +34,10 @@ class HardwareVideoDecoder(
     private var bytesInWindow = 0L
     private var lastFpsTimestamp = System.currentTimeMillis()
 
+    @Volatile private var decodedWidth: Int = config.width
+    @Volatile private var decodedHeight: Int = config.height
+    @Volatile private var decodedCodecLabel: String = codecDisplayName(config.codecMime)
+
     fun start() {
         synchronized(lock) { startCodec() }
     }
@@ -199,11 +203,13 @@ class HardwareVideoDecoder(
             val outputIndex = codec.dequeueOutputBuffer(info, 0)
             if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                 val format = codec.outputFormat
-                Log.i(
-                    tag,
-                    "Decoder output format: ${format.getString(MediaFormat.KEY_MIME)} " +
-                        "${format.getInteger(MediaFormat.KEY_WIDTH)}x${format.getInteger(MediaFormat.KEY_HEIGHT)}"
-                )
+                decodedWidth = runCatching { format.getInteger(MediaFormat.KEY_WIDTH) }.getOrDefault(config.width)
+                decodedHeight = runCatching { format.getInteger(MediaFormat.KEY_HEIGHT) }.getOrDefault(config.height)
+                val mime = runCatching { format.getString(MediaFormat.KEY_MIME) }.getOrDefault(config.codecMime) ?: config.codecMime
+                val profile = runCatching { format.getInteger(MediaFormat.KEY_PROFILE) }.getOrDefault(-1)
+                val profileLabel = profileName(mime, profile)
+                decodedCodecLabel = codecDisplayName(mime) + if (profileLabel.isBlank()) "" else " $profileLabel"
+                Log.i(tag, "Decoder output format: $decodedCodecLabel ${decodedWidth}x${decodedHeight}")
                 continue
             }
             if (outputIndex < 0) break
@@ -228,7 +234,10 @@ class HardwareVideoDecoder(
                         currentFps = fps,
                         latencyMs = latencyMs,
                         bitrateMbps = bitrate,
-                        isGamingModeActive = isGamingMode
+                        isGamingModeActive = isGamingMode,
+                        resolutionLabel = "${decodedWidth}x${decodedHeight}",
+                        codecLabel = decodedCodecLabel,
+                        targetBitrateMbps = config.bitrate / 1_000_000f
                     )
                 )
                 frameCount = 0
@@ -237,6 +246,27 @@ class HardwareVideoDecoder(
             }
         }
     }
+
+    private fun profileName(mime: String, profile: Int): String {
+        if (profile <= 0) return ""
+        return when {
+            mime.equals(MediaFormat.MIMETYPE_VIDEO_AVC, ignoreCase = true) -> when (profile) {
+                1 -> "Baseline"
+                2 -> "Main"
+                3, 4 -> "High"
+                else -> ""
+            }
+            mime.equals(MediaFormat.MIMETYPE_VIDEO_HEVC, ignoreCase = true) -> when (profile) {
+                1 -> "Main"
+                2 -> "Main10"
+                else -> ""
+            }
+            else -> ""
+        }
+    }
+
+    private fun codecDisplayName(mime: String): String =
+        if (mime.equals(MediaFormat.MIMETYPE_VIDEO_HEVC, ignoreCase = true)) "H.265" else "H.264"
 
     private fun isKeyFrame(data: ByteArray, offset: Int, length: Int): Boolean {
         if (length < 5) return false

@@ -1,6 +1,7 @@
 package com.castpro.tv.viewmodel
 
 import android.app.Application
+import android.content.Context
 import android.graphics.Bitmap
 import android.net.ConnectivityManager
 import android.net.Network
@@ -38,6 +39,8 @@ data class TvUiState(
     val aspectRatio: Float = 16f / 9f,
     val metrics: LatencyMetrics = LatencyMetrics(),
     val showHudOverlay: Boolean = true,
+    val displayMode: TvDisplayMode = TvDisplayMode.FULL,
+    val colorFilter: TvColorFilter = TvColorFilter.STANDARD,
     val connectionError: String? = null,
     val isServerRunning: Boolean = false,
     val lastCrash: String? = null
@@ -45,6 +48,7 @@ data class TvUiState(
 
 class TvReceiverViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application
+    private val prefs = app.getSharedPreferences("castpro_tv_settings", Context.MODE_PRIVATE)
     private val _uiState = MutableStateFlow(TvUiState())
     val uiState: StateFlow<TvUiState> = _uiState.asStateFlow()
 
@@ -86,6 +90,16 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
         _uiState.update {
             it.copy(
                 serviceName = defaultServiceName(),
+                displayMode = runCatching {
+                    TvDisplayMode.valueOf(
+                        prefs.getString(KEY_DISPLAY_MODE, TvDisplayMode.FULL.name) ?: TvDisplayMode.FULL.name
+                    )
+                }.getOrDefault(TvDisplayMode.FULL),
+                colorFilter = runCatching {
+                    TvColorFilter.valueOf(
+                        prefs.getString(KEY_COLOR_FILTER, TvColorFilter.STANDARD.name) ?: TvColorFilter.STANDARD.name
+                    )
+                }.getOrDefault(TvColorFilter.STANDARD),
                 lastCrash = com.castpro.tv.tvCrashLogFile(app)
                     .takeIf { file -> file.exists() }
                     ?.readText()
@@ -269,6 +283,28 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
         _uiState.update { it.copy(showHudOverlay = !it.showHudOverlay) }
     }
 
+    fun setDisplayMode(mode: TvDisplayMode) {
+        prefs.edit().putString(KEY_DISPLAY_MODE, mode.name).apply()
+        _uiState.update { it.copy(displayMode = mode) }
+    }
+
+    fun cycleDisplayMode() {
+        val modes = TvDisplayMode.values()
+        val next = modes[(_uiState.value.displayMode.ordinal + 1) % modes.size]
+        setDisplayMode(next)
+    }
+
+    fun setColorFilter(filter: TvColorFilter) {
+        prefs.edit().putString(KEY_COLOR_FILTER, filter.name).apply()
+        _uiState.update { it.copy(colorFilter = filter) }
+    }
+
+    fun cycleColorFilter() {
+        val filters = TvColorFilter.values()
+        val next = filters[(_uiState.value.colorFilter.ordinal + 1) % filters.size]
+        setColorFilter(next)
+    }
+
     override fun onCleared() {
         super.onCleared()
         retryJob?.cancel()
@@ -285,5 +321,7 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
     companion object {
         /** Typical LAN delivery time used to separate clock skew from latency. */
         private const val ASSUMED_ONE_WAY_NS = 2_000_000L
+        private const val KEY_DISPLAY_MODE = "display_mode"
+        private const val KEY_COLOR_FILTER = "color_filter"
     }
 }
