@@ -1,15 +1,21 @@
 name: Build & Release CastPro Phone + TV APKs
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Release tag (for example v2.0.0)"
+        description: "Release tag (for example v2.2.0-rc.1 or v2.2.0)"
         required: true
-        default: "v2.0.0"
+        default: "v2.2.0-rc.1"
+        type: string
+      prerelease:
+        description: "Publish as prerelease. Stable requires a hardware proof reference."
+        required: true
+        default: true
+        type: boolean
+      hardware_proof_reference:
+        description: "Required for a stable release: issue/PR URL with clean TV screenshot proof"
+        required: false
         type: string
 
 permissions:
@@ -33,18 +39,18 @@ jobs:
         id: release
         env:
           INPUT_TAG: ${{ inputs.tag_name }}
-          EVENT_NAME: ${{ github.event_name }}
-          REF_NAME: ${{ github.ref_name }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          HARDWARE_PROOF: ${{ inputs.hardware_proof_reference }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            TAG="$INPUT_TAG"
-          else
-            TAG="$REF_NAME"
-          fi
+          TAG="$INPUT_TAG"
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]]; then
             echo "::error::Invalid release tag: $TAG (expected vX.Y.Z)"
+            exit 1
+          fi
+          if [[ "$PRERELEASE" != "true" && -z "$HARDWARE_PROOF" ]]; then
+            echo "::error::A stable release requires hardware_proof_reference with clean TV screenshot evidence."
             exit 1
           fi
           VERSION="${TAG#v}"
@@ -59,18 +65,16 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
 
-      - name: Ensure Android 35 SDK components
+      - name: Ensure Android 35 SDK, NDK, and CMake
         shell: bash
         run: |
           set -euo pipefail
-          # GitHub-hosted Ubuntu runners already include the Android SDK.
-          # setup-android@v3 fails because it installs the removed "tools" package.
           export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           SDKMGR="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
@@ -81,9 +85,16 @@ jobs:
           yes | "$SDKMGR" --licenses >/dev/null || true
           if [[ ! -d "$ANDROID_HOME/platforms/android-35" ]]; then "$SDKMGR" "platforms;android-35"; fi
           if [[ ! -d "$ANDROID_HOME/build-tools/35.0.0" ]]; then "$SDKMGR" "build-tools;35.0.0"; fi
+          if [[ ! -d "$ANDROID_HOME/ndk/27.2.12479018" ]]; then "$SDKMGR" "ndk;27.2.12479018"; fi
+          if [[ ! -d "$ANDROID_HOME/cmake/3.22.1" ]]; then "$SDKMGR" "cmake;3.22.1"; fi
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Run unit tests
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --stacktrace testDebugUnitTest
 
       - name: Validate signing secrets and decode keystore
         env:
@@ -113,12 +124,11 @@ jobs:
           CASTPRO_VERSION_NAME: ${{ steps.release.outputs.version }}
           CASTPRO_VERSION_CODE: ${{ steps.release.outputs.version_code }}
         run: |
-          chmod +x ./gradlew
           ./gradlew --no-daemon --stacktrace \
             :app-phone:clean :app-tv:clean \
             :app-phone:assembleRelease :app-tv:assembleRelease
 
-      - name: Verify APKs and generate SHA-256 checksums
+      - name: Verify APKs, package source, and generate SHA-256 checksums
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         shell: bash
@@ -133,12 +143,13 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$TV_APK"
           cp "$PHONE_APK" "release-assets/CastPro-Phone-${RELEASE_TAG}.apk"
           cp "$TV_APK" "release-assets/CastPro-TV-${RELEASE_TAG}.apk"
+          git ls-files | zip -q -@ "release-assets/CastPro-full-project-${RELEASE_TAG}.zip"
           cd release-assets
-          sha256sum "CastPro-Phone-${RELEASE_TAG}.apk" > "CastPro-Phone-${RELEASE_TAG}.apk.sha256"
-          sha256sum "CastPro-TV-${RELEASE_TAG}.apk" > "CastPro-TV-${RELEASE_TAG}.apk.sha256"
-          sha256sum -c "CastPro-Phone-${RELEASE_TAG}.apk.sha256"
-          sha256sum -c "CastPro-TV-${RELEASE_TAG}.apk.sha256"
-          sha256sum "CastPro-Phone-${RELEASE_TAG}.apk" "CastPro-TV-${RELEASE_TAG}.apk" > SHA256SUMS.txt
+          for file in *.apk *.zip; do
+            sha256sum "$file" > "$file.sha256"
+          done
+          sha256sum -c *.sha256
+          cat *.sha256 > SHA256SUMS.txt
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -146,15 +157,19 @@ jobs:
           tag_name: ${{ steps.release.outputs.tag }}
           target_commitish: ${{ github.sha }}
           name: CastPro ${{ steps.release.outputs.tag }}
+          body: |
+            ${{ fromJSON(inputs.prerelease) == true && 'Pre-release for hardware validation. Do not treat as stable.' || format('Stable release. Hardware proof: {0}', inputs.hardware_proof_reference) }}
           generate_release_notes: true
           draft: false
-          prerelease: false
+          prerelease: ${{ fromJSON(inputs.prerelease) }}
           fail_on_unmatched_files: true
           files: |
             release-assets/CastPro-Phone-${{ steps.release.outputs.tag }}.apk
             release-assets/CastPro-Phone-${{ steps.release.outputs.tag }}.apk.sha256
             release-assets/CastPro-TV-${{ steps.release.outputs.tag }}.apk
             release-assets/CastPro-TV-${{ steps.release.outputs.tag }}.apk.sha256
+            release-assets/CastPro-full-project-${{ steps.release.outputs.tag }}.zip
+            release-assets/CastPro-full-project-${{ steps.release.outputs.tag }}.zip.sha256
             release-assets/SHA256SUMS.txt
 
       - name: Remove signing keystore from runner

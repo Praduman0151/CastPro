@@ -3,10 +3,11 @@ package com.castpro.core.streaming.transport
 import android.util.Log
 import com.castpro.core.common.protocol.Constants
 import com.castpro.core.common.protocol.PacketHeader
-import java.io.OutputStream
 import java.net.InetSocketAddress
-import java.net.Socket
 import java.nio.ByteBuffer
+import java.nio.channels.SelectionKey
+import java.nio.channels.Selector
+import java.nio.channels.SocketChannel
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -14,7 +15,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * A failed write used to take the whole capture pipeline down. Now the encoder
  * simply drops frames while the TV is away, a background thread reconnects, and
- * the service asks for a fresh keyframe as soon as the link is back.
+ * the service asks for a fresh keyframe as soon as the link is back. Writes are
+ * bounded: a stalled receiver must never block the encoder's output drain
+ * forever, which previously froze the native pipeline after a few frames.
  */
 class TcpStreamTransport(
     val host: String,
@@ -26,15 +29,15 @@ class TcpStreamTransport(
     private val connecting = AtomicBoolean(false)
     private val writeLock = Any()
     private val stateLock = Any()
+    private val selector: Selector = Selector.open()
 
-    @Volatile private var socket: Socket? = null
-    @Volatile private var output: OutputStream? = null
+    @Volatile private var channel: SocketChannel? = null
     @Volatile private var lastReportedConnected: Boolean? = null
     @Volatile private var lastReportedError: String? = null
     private var reconnectThread: Thread? = null
 
     override val isConnected: Boolean
-        get() = output != null
+        get() = channel?.let { it.isConnected && it.isOpen } ?: false
 
     override fun start() {
         if (!running.compareAndSet(false, true)) return
@@ -68,18 +71,34 @@ class TcpStreamTransport(
 
     private fun connectOnce() {
         if (!running.get() || !connecting.compareAndSet(false, true)) return
+        var candidate: SocketChannel? = null
         try {
-            val candidate = Socket()
-            candidate.tcpNoDelay = true
-            candidate.sendBufferSize = 256 * 1024
-            candidate.connect(InetSocketAddress(host, port), 2_500)
+            candidate = SocketChannel.open().apply {
+                configureBlocking(false)
+                socket().tcpNoDelay = true
+                socket().sendBufferSize = 256 * 1024
+            }
+            if (!candidate.connect(InetSocketAddress(host, port))) {
+                synchronized(writeLock) {
+                    val key = candidate.register(selector, SelectionKey.OP_CONNECT)
+                    if (selector.select(CONNECT_TIMEOUT_MS) == 0 || !key.isConnectable ||
+                        !candidate.finishConnect()
+                    ) {
+                        key.cancel()
+                        selector.selectNow()
+                        throw java.net.ConnectException("Connect timed out")
+                    }
+                    key.cancel()
+                    selector.selectNow()
+                }
+            }
             synchronized(writeLock) {
-                socket = candidate
-                output = candidate.getOutputStream()
+                channel = candidate
             }
             reportConnected(true)
             Log.i(tag, "Connected to receiver at $host:$port")
         } catch (e: Exception) {
+            runCatching { candidate?.close() }
             Log.d(tag, "Waiting for receiver $host:$port: ${e.message}")
             reportConnected(false, e.message)
         } finally {
@@ -88,14 +107,12 @@ class TcpStreamTransport(
     }
 
     override fun send(header: PacketHeader, payload: ByteArray): Boolean {
-        val stream = output ?: return false
-        val headerBuffer = ByteBuffer.allocate(PacketHeader.HEADER_SIZE)
-        header.writeTo(headerBuffer)
+        val active = channel ?: return false
+        val headerBytes = ByteBuffer.allocate(PacketHeader.HEADER_SIZE).also { header.writeTo(it) }.array()
         return synchronized(writeLock) {
             try {
-                stream.write(headerBuffer.array(), 0, PacketHeader.HEADER_SIZE)
-                stream.write(payload)
-                stream.flush()
+                writeFully(active, ByteBuffer.wrap(headerBytes))
+                writeFully(active, ByteBuffer.wrap(payload))
                 true
             } catch (e: Exception) {
                 Log.w(tag, "Send failed, dropping connection", e)
@@ -105,12 +122,28 @@ class TcpStreamTransport(
         }
     }
 
+    /** Returns false only after the write deadline expires; never blocks forever. */
+    private fun writeFully(active: SocketChannel, buffer: ByteBuffer) {
+        val key = active.register(selector, SelectionKey.OP_WRITE)
+        val deadlineMs = System.currentTimeMillis() + WRITE_TIMEOUT_MS
+        try {
+            while (buffer.hasRemaining()) {
+                if (active.write(buffer) > 0) continue
+                val remaining = deadlineMs - System.currentTimeMillis()
+                if (remaining <= 0L) throw java.io.IOException("TCP write timed out")
+                selector.select(remaining)
+                selector.selectedKeys().clear()
+            }
+        } finally {
+            key.cancel()
+            selector.selectNow()
+        }
+    }
+
     private fun closeSocket(reason: String?) {
         synchronized(writeLock) {
-            runCatching { output?.close() }
-            runCatching { socket?.close() }
-            output = null
-            socket = null
+            runCatching { channel?.close() }
+            channel = null
         }
         reportConnected(false, reason)
     }
@@ -129,5 +162,11 @@ class TcpStreamTransport(
         closeSocket("Stream stopped")
         reconnectThread?.interrupt()
         reconnectThread = null
+        runCatching { selector.close() }
+    }
+
+    private companion object {
+        const val CONNECT_TIMEOUT_MS = 2_500L
+        const val WRITE_TIMEOUT_MS = 500L
     }
 }
