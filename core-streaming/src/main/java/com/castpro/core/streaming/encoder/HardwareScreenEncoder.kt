@@ -157,16 +157,6 @@ class HardwareScreenEncoder(
                     // and nanoTime() has a different epoch on each device.
                     val captureTimeNano = System.currentTimeMillis() * 1_000_000L
 
-                    headerBuffer.clear()
-                    val header = PacketHeader(
-                        type = Constants.TYPE_VIDEO_NAL,
-                        flags = flags,
-                        sequenceNumber = sequenceNumber.incrementAndGet(),
-                        timestampNano = captureTimeNano,
-                        payloadLength = bufferInfo.size
-                    )
-                    header.writeTo(headerBuffer)
-
                     val payload = ByteArray(bufferInfo.size)
                     encodedData.get(payload)
 
@@ -183,6 +173,18 @@ class HardwareScreenEncoder(
                         }
                         sendCodecConfig()
                     }
+
+                    // Allocate the video sequence number after any codec-config
+                    // packet so TCP order and sequence order stay consistent.
+                    headerBuffer.clear()
+                    val header = PacketHeader(
+                        type = Constants.TYPE_VIDEO_NAL,
+                        flags = flags,
+                        sequenceNumber = sequenceNumber.incrementAndGet(),
+                        timestampNano = captureTimeNano,
+                        payloadLength = bufferInfo.size
+                    )
+                    header.writeTo(headerBuffer)
 
                     val delivered = transport?.send(header, payload) ?: true
                     if (delivered) {
