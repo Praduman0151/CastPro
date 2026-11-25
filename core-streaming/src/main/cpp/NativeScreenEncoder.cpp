@@ -4,6 +4,7 @@
 #include <media/NdkMediaCodec.h>
 #include <media/NdkMediaFormat.h>
 #include <atomic>
+#include <limits>
 #include <thread>
 
 #define TAG "CastProNative"
@@ -30,6 +31,49 @@ void drain(Engine* e) {
     AMediaCodecBufferInfo info{};
     while (e->running.load()) {
         ssize_t index = AMediaCodec_dequeueOutputBuffer(e->codec, &info, 10000);
+
+        // Encoders may publish SPS/PPS (or VPS/SPS/PPS) through the output
+        // MediaFormat instead of a BUFFER_FLAG_CODEC_CONFIG output buffer.
+        // The Kotlin encoder handles INFO_OUTPUT_FORMAT_CHANGED; the native
+        // backend must do the same or the TV may receive IDRs without CSD.
+        if (index == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) {
+            AMediaFormat* format = AMediaCodec_getOutputFormat(e->codec);
+            if (format) {
+                void* csd0 = nullptr;
+                void* csd1 = nullptr;
+                size_t size0 = 0;
+                size_t size1 = 0;
+                const bool hasCsd0 = AMediaFormat_getBuffer(format, "csd-0", &csd0, &size0);
+                const bool hasCsd1 = AMediaFormat_getBuffer(format, "csd-1", &csd1, &size1);
+                const size_t total = (hasCsd0 ? size0 : 0) + (hasCsd1 ? size1 : 0);
+                if (total > 0 && total <= static_cast<size_t>(std::numeric_limits<jsize>::max())) {
+                    jbyteArray bytes = env->NewByteArray(static_cast<jsize>(total));
+                    if (bytes) {
+                        size_t offset = 0;
+                        if (hasCsd0 && size0 > 0) {
+                            env->SetByteArrayRegion(bytes, 0, static_cast<jsize>(size0),
+                                reinterpret_cast<const jbyte*>(csd0));
+                            offset = size0;
+                        }
+                        if (hasCsd1 && size1 > 0) {
+                            env->SetByteArrayRegion(bytes, static_cast<jsize>(offset),
+                                static_cast<jsize>(size1), reinterpret_cast<const jbyte*>(csd1));
+                        }
+                        if (!env->ExceptionCheck()) {
+                            // Native callback bit 0 is the CastPro codec-config marker.
+                            env->CallVoidMethod(e->listener, e->callback, bytes,
+                                static_cast<jlong>(0), static_cast<jint>(1));
+                        }
+                        if (env->ExceptionCheck()) env->ExceptionClear();
+                        env->DeleteLocalRef(bytes);
+                    }
+                }
+                AMediaFormat_delete(format);
+            }
+            continue;
+        }
+        if (index == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) continue;
+
         if (index >= 0) {
             size_t capacity = 0;
             uint8_t* data = AMediaCodec_getOutputBuffer(e->codec, index, &capacity);
