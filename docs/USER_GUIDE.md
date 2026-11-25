@@ -1,6 +1,6 @@
 # CastPro — User Guide
 
-*Current release: [v1.0.6](https://github.com/Praduman0151/CastPro/releases/tag/v1.0.6)*
+*Current release: [v2.0.0](https://github.com/Praduman0151/CastPro/releases/tag/v2.0.0)*
 
 ## About CastPro
 
@@ -14,10 +14,10 @@ Latency depends on the phone, TV, encoder, decoder, Wi-Fi path and selected qual
 
 | App | Target device | Download |
 | --- | --- | --- |
-| CastPro Phone | Android 8.0+ phone | [`CastPro-Phone-debug.apk`](https://github.com/Praduman0151/CastPro/releases/download/v1.0.6/CastPro-Phone-debug.apk) |
-| CastPro TV | Android TV / Google TV, API 26+ | [`CastPro-TV-debug.apk`](https://github.com/Praduman0151/CastPro/releases/download/v1.0.6/CastPro-TV-debug.apk) |
+| CastPro Phone | Android 8.0+ phone | [`CastPro-Phone-v2.0.0.apk`](https://github.com/Praduman0151/CastPro/releases/download/v2.0.0/CastPro-Phone-v2.0.0.apk) |
+| CastPro TV | Android TV / Google TV, API 26+ | [`CastPro-TV-v2.0.0.apk`](https://github.com/Praduman0151/CastPro/releases/download/v2.0.0/CastPro-TV-v2.0.0.apk) |
 
-Install the phone APK normally after allowing installation from your file manager.
+Install the phone APK normally after allowing installation from your file manager. v2.0.0 uses a new release signing key: if an older `v1.x` debug build is installed, uninstall it first.
 
 Sideload the TV APK using a TV file manager, "Send Files to TV", a USB drive or development ADB. ADB is only an installation/debug method; it is never the casting transport.
 
@@ -87,7 +87,7 @@ Live quality changes reuse the existing screen-capture permission, swap the enco
 
 ## 9. Current verification status
 
-- CI compiles both phone and TV APKs for v1.0.6.
+- CI built, signed and verified both phone and TV APKs for v2.0.0; SHA-256 checksums are attached to the release.
 - Earlier Phase 1 testing recorded 20 consecutive quality changes without root-layout or surface-bound movement.
 - Full-screen Stretch verification with PUBG Mobile on the OnePlus Nord 5 and TCL Android TV is still pending.
 - UDP transport and USB-assisted casting are experimental documents/prototypes, not active production features.
