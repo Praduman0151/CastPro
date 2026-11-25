@@ -18,7 +18,7 @@ class NativeScreenEncoder(
     private val transport: StreamTransport,
     private val onStats: ((EncoderStats) -> Unit)? = null,
     private val onError: (String) -> Unit = {}
-) {
+) : ScreenEncoderBackend {
     companion object {
         private const val TAG = "NativeScreenEncoder"
         init { System.loadLibrary("castpro_native_engine") }
@@ -40,7 +40,7 @@ class NativeScreenEncoder(
     private var windowBytes = 0L
     private var windowStart = System.currentTimeMillis()
 
-    fun prepare(): Surface {
+    override fun prepare(): Surface {
         check(handle == 0L) { "Native encoder already prepared" }
         handle = nativeStart(config.codecMime, config.width, config.height, config.fps, config.bitrate)
         check(handle != 0L) { "NDK MediaCodec initialization failed for " + config.codecMime }
@@ -50,7 +50,7 @@ class NativeScreenEncoder(
         }
     }
 
-    fun start() {
+    override fun start() {
         check(handle != 0L) { "Call prepare() before start()" }
         running.set(true)
         windowStart = System.currentTimeMillis()
@@ -100,10 +100,10 @@ class NativeScreenEncoder(
         windowStart = now
     }
 
-    fun requestKeyFrame() { if (handle != 0L) nativeRequestKeyFrame(handle) }
+    override fun requestKeyFrame() { if (handle != 0L) nativeRequestKeyFrame(handle) }
     fun updateBitrate(bitrate: Int) { if (handle != 0L) nativeUpdateBitrate(handle, bitrate) }
 
-    fun stop() {
+    override fun stop() {
         running.set(false)
         val current = handle
         handle = 0L
