@@ -7,10 +7,22 @@ android {
     namespace = "com.castpro.core.streaming"
     compileSdk = 35
 
+    ndkVersion = "27.2.12479018"
+
     defaultConfig {
         minSdk = 26
+        externalNativeBuild {
+            cmake { cppFlags += "-std=c++17" }
+        }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     compileOptions {
