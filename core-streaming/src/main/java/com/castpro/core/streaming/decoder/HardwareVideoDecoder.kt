@@ -22,7 +22,7 @@ class HardwareVideoDecoder(
     initialScalingMode: Int = MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING,
     private val onMetricsUpdated: (LatencyMetrics) -> Unit,
     private val onError: (String) -> Unit = {},
-    private val clockOffsetProvider: () -> Long = { 0L }
+    private val clockOffsetProvider: () -> Long? = { null }
 ) {
     private val tag = "HardwareVideoDecoder"
     private val lock = Any()
@@ -180,6 +180,11 @@ class HardwareVideoDecoder(
         isKeyframe: Boolean = false
     ) {
         synchronized(lock) {
+            // Count bytes received from the network, even when decoder backpressure
+            // causes an input packet to be dropped. This is receive bitrate, not
+            // merely the subset of bytes successfully queued into MediaCodec.
+            if (!isCodecConfig && length > 0) bytesInWindow += length.toLong()
+
             // The sender marks IDRs; the byte scan is only a fallback for
             // older senders that emit Annex-B start codes.
             val keyFrame = isKeyframe || isKeyFrame(data, offset, length)
@@ -218,8 +223,6 @@ class HardwareVideoDecoder(
                 val presentationTimeUs = System.nanoTime() / 1_000L
                 codec.queueInputBuffer(inputIndex, 0, bytesToQueue, presentationTimeUs, codecFlags)
                 if (!isCodecConfig && keyFrame) waitingForKeyframe = false
-                bytesInWindow += bytesToQueue
-
                 drainOutput(codec, timestampNano, isGamingMode)
             } catch (e: Throwable) {
                 Log.e(tag, "Decode error", e)
@@ -262,9 +265,14 @@ class HardwareVideoDecoder(
                 // raw cross-device timestamps are meaningless when the two
                 // clocks differ by seconds.
                 val nowNs = nowMs * 1_000_000L
-                val latencyNs = (nowNs - timestampNano - clockOffsetProvider())
-                    .coerceIn(0L, 1_000_000_000L)
-                val latencyMs = latencyNs / 1_000_000f
+                // A one-way sample is not trustworthy until a heartbeat has
+                // established the phone/TV wall-clock offset. Do not clamp a
+                // negative/invalid sample to 0 ms: show it as unavailable instead.
+                val latencyNs = clockOffsetProvider()?.let { offset ->
+                    (nowNs - timestampNano - offset).takeIf { it > 0L }
+                }
+                val latencyMs = latencyNs?.coerceAtMost(1_000_000_000L)
+                    ?.div(1_000_000f) ?: -1f
                 onMetricsUpdated(
                     LatencyMetrics(
                         currentFps = fps,
