@@ -46,6 +46,7 @@ fun PhoneDashboardScreen(
     onScanQrClicked: () -> Unit,
     onStartCastClicked: () -> Unit,
     onStopCastClicked: () -> Unit,
+    onToggleScreenDim: () -> Unit,
     onDismissError: () -> Unit = {}
 ) {
     val scrollState = rememberScrollState()
@@ -446,6 +447,42 @@ fun PhoneDashboardScreen(
                         unfocusedTextColor = Color.White
                     )
                 )
+            }
+        }
+
+        if (state.status == StreamStatus.STREAMING) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(
+                        Icons.Default.BrightnessLow,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(28.dp)
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Screen-Dim Mode",
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            "Lower phone brightness while casting. The display stays on so screen capture can continue.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    FilledTonalButton(onClick = onToggleScreenDim) {
+                        Text("Toggle")
+                    }
+                }
             }
         }
 
