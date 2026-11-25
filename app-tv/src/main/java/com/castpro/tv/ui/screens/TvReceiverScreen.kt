@@ -117,13 +117,13 @@ fun TvReceiverScreen(
                             modifier = Modifier.size(64.dp)
                         )
                         Text(
-                            text = "Cast Pro TV Receiver",
+                            text = "CASTPRO TV",
                             color = Color.White,
                             fontSize = 28.sp,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Offline ultra-low latency display",
+                            text = "WIRELESS DISPLAY RECEIVER",
                             color = Color.Gray,
                             fontSize = 14.sp
                         )
