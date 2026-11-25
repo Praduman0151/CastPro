@@ -213,6 +213,25 @@ class MainActivity : ComponentActivity() {
                                 onScanQrClicked = { viewModel.setNavTab(1) },
                                 onStartCastClicked = { beginStartFlow() },
                                 onDismissError = { viewModel.clearError() },
+                                onToggleScreenDim = {
+                                    if (Settings.System.canWrite(this@MainActivity)) {
+                                        startService(Intent(this@MainActivity, ScreenCaptureService::class.java).apply {
+                                            action = ScreenCaptureService.ACTION_TOGGLE_SCREEN_DIM
+                                        })
+                                    } else {
+                                        Toast.makeText(
+                                            this@MainActivity,
+                                            "Allow Modify System Settings for CastPro, then tap Toggle again.",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                        startActivity(
+                                            Intent(
+                                                Settings.ACTION_MANAGE_WRITE_SETTINGS,
+                                                Uri.parse("package:$packageName")
+                                            )
+                                        )
+                                    }
+                                },
                                 onStopCastClicked = {
                                     val stopIntent = Intent(this@MainActivity, ScreenCaptureService::class.java).apply {
                                         action = ScreenCaptureService.ACTION_STOP

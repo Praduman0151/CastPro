@@ -63,6 +63,7 @@ class ScreenCaptureService : Service() {
     private var transport: StreamTransport? = null
     private var resolutionMonitor: ScreenResolutionMonitor? = null
     private var wakeLock: ScreenWakeLock? = null
+    private val screenDimController by lazy { ScreenDimController(this) }
     private var webServer: WebStreamingServer? = null
     private var webMirror: WebMirrorCapture? = null
 
@@ -95,6 +96,8 @@ class ScreenCaptureService : Service() {
         const val ACTION_UPDATE_CONFIG = "com.castpro.phone.action.UPDATE_CONFIG"
         const val ACTION_STOP = "com.castpro.phone.action.STOP"
         const val ACTION_TOGGLE_MUTE = "com.castpro.phone.action.TOGGLE_MUTE"
+        const val ACTION_TOGGLE_SCREEN_DIM = "com.castpro.phone.action.TOGGLE_SCREEN_DIM"
+        const val ACTION_RESTORE_SCREEN_DIM = "com.castpro.phone.action.RESTORE_SCREEN_DIM"
 
         const val EXTRA_RESULT_CODE = "extra_result_code"
         const val EXTRA_RESULT_DATA = "extra_result_data"
@@ -204,6 +207,25 @@ class ScreenCaptureService : Service() {
                     action = InGameOverlayService.ACTION_SET_MUTED
                     putExtra(InGameOverlayService.EXTRA_MUTED, audioMuted)
                 })
+            }
+            ACTION_TOGGLE_SCREEN_DIM -> {
+                when {
+                    !android.provider.Settings.System.canWrite(this) ->
+                        updateNotification("Allow Modify System Settings in CastPro to dim the display")
+                    screenDimController.toggle() ->
+                        updateNotification(if (screenDimController.isDimmed()) {
+                            "Screen dimmed for casting • restore from notification"
+                        } else {
+                            "Screen brightness restored"
+                        })
+                    else -> updateNotification("Could not change screen brightness • check system settings access")
+                }
+            }
+            ACTION_RESTORE_SCREEN_DIM -> {
+                updateNotification(
+                    if (screenDimController.restore()) "Screen brightness restored"
+                    else "Could not restore brightness • reopen CastPro and check permission"
+                )
             }
         }
         return START_NOT_STICKY
@@ -731,6 +753,8 @@ class ScreenCaptureService : Service() {
         } catch (e: Exception) {
             Log.e(tag, "Error stopping stream", e)
         } finally {
+            // Always return the panel to the user's previous brightness after a cast.
+            runCatching { screenDimController.restore() }
             webMirror = null
             resolutionMonitor = null
             wakeLock = null
@@ -811,11 +835,21 @@ class ScreenCaptureService : Service() {
             Intent(this, ScreenCaptureService::class.java).apply { action = ACTION_STOP },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Cast Pro Active")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentIntent(openIntent)
+        if (screenDimController.isDimmed()) {
+            val restoreIntent = PendingIntent.getService(
+                this,
+                2,
+                Intent(this, ScreenCaptureService::class.java).apply { action = ACTION_RESTORE_SCREEN_DIM },
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(android.R.drawable.ic_menu_day, "Restore brightness", restoreIntent)
+        }
+        return builder
             .addAction(android.R.drawable.ic_media_pause, "Stop", stopIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
