@@ -110,6 +110,8 @@ jobs:
           TV_APK="app-tv/build/outputs/apk/release/app-tv-release.apk"
           test -s "$PHONE_APK"
           test -s "$TV_APK"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$PHONE_APK"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$TV_APK"
           cp "$PHONE_APK" "release-assets/CastPro-Phone-${RELEASE_TAG}.apk"
           cp "$TV_APK" "release-assets/CastPro-TV-${RELEASE_TAG}.apk"
           cd release-assets
