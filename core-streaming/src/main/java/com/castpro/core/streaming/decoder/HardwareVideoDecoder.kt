@@ -204,10 +204,29 @@ class HardwareVideoDecoder(
                 val inputIndex = codec.dequeueInputBuffer(if (keyFrame) 10_000 else 0)
                 if (inputIndex < 0) return
 
-                val inputBuffer = codec.getInputBuffer(inputIndex) ?: return
-                val bytesToQueue = minOf(length, inputBuffer.remaining())
-                if (bytesToQueue <= 0) return
-                inputBuffer.put(data, offset, bytesToQueue)
+                // Once dequeueInputBuffer() succeeds, this index must be
+                // returned to MediaCodec. Leaving it unqueued can gradually
+                // starve the decoder after a transient buffer problem.
+                val presentationTimeUs = System.nanoTime() / 1_000L
+                val inputBuffer = codec.getInputBuffer(inputIndex)
+                if (inputBuffer == null) {
+                    Log.w(tag, "Decoder returned a null input buffer; returning the slot empty")
+                    codec.queueInputBuffer(inputIndex, 0, 0, presentationTimeUs, 0)
+                    return
+                }
+                if (offset < 0 || length <= 0 || offset > data.size - length) {
+                    Log.w(tag, "Rejecting invalid video payload range: offset=$offset length=$length size=${data.size}")
+                    codec.queueInputBuffer(inputIndex, 0, 0, presentationTimeUs, 0)
+                    return
+                }
+                if (length > inputBuffer.remaining()) {
+                    // Never truncate an access unit: a partial NAL/frame can
+                    // poison decoder state and produce a green/corrupt picture.
+                    Log.w(tag, "Dropping oversized video access unit: $length bytes, buffer=${inputBuffer.remaining()}")
+                    codec.queueInputBuffer(inputIndex, 0, 0, presentationTimeUs, 0)
+                    return
+                }
+                inputBuffer.put(data, offset, length)
                 // Parameter sets must be flagged as codec config or decoders
                 // on many TVs reject the following IDR.
                 val codecFlags = if (isCodecConfig) MediaCodec.BUFFER_FLAG_CODEC_CONFIG else 0
@@ -215,10 +234,9 @@ class HardwareVideoDecoder(
                 // clock. The phone's wall-clock stamp is only for latency
                 // reporting; feeding it here makes SurfaceFlinger delay frames
                 // and the picture appears to run in slow motion.
-                val presentationTimeUs = System.nanoTime() / 1_000L
-                codec.queueInputBuffer(inputIndex, 0, bytesToQueue, presentationTimeUs, codecFlags)
+                codec.queueInputBuffer(inputIndex, 0, length, presentationTimeUs, codecFlags)
                 if (!isCodecConfig && keyFrame) waitingForKeyframe = false
-                bytesInWindow += bytesToQueue
+                bytesInWindow += length
 
                 drainOutput(codec, timestampNano, isGamingMode)
             } catch (e: Throwable) {
