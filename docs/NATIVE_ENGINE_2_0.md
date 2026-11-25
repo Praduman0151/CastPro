@@ -16,7 +16,7 @@ Experimental NDK implementation on `feature/native-engine-2.0-gaming`. Not enabl
 
 ## Current limitations
 
-- Backend factory, service-level runtime fallback and live-config integration remain to be completed before enabling this backend.
+- Service integration is present: Android 10+ gaming sessions try the NDK backend, and initialization failures fall back to the existing Kotlin encoder. Live quality-change and lifecycle behaviour still require device validation.
 - UDP is not enabled: the current production TV receiver speaks the existing TCP protocol. Switching only the sender to UDP would break compatibility.
 - DSCP/WMM priority is advisory and cannot guarantee router scheduling.
 - No retransmission, FEC or receiver jitter-buffer changes are included.
