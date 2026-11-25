@@ -34,7 +34,12 @@ object ScreenEncoderFactory {
                 onError("Native encoder unavailable; using compatibility encoder")
             }
         }
-        val compatibility = HardwareScreenEncoder(config, transport, onStats, onError)
+        val compatibility = HardwareScreenEncoder(
+            config = config,
+            transport = transport,
+            onStats = onStats,
+            onError = onError
+        )
         val surface = compatibility.prepare()
         compatibility.start()
         return compatibility to surface
