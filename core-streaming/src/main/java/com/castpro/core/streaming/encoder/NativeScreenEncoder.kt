@@ -42,7 +42,12 @@ class NativeScreenEncoder(
     // while nativeStop joins the drain thread.
     private val nativeCallLock = Any()
     @Volatile private var handle = 0L
+    // ANativeWindow_toSurface() returns a Java Surface that owns a reference
+    // to the codec's input window. Keep it alive for the whole session; if it
+    // is collected, the virtual display can silently stop receiving frames.
+    @Volatile private var inputSurface: Surface? = null
     private var codecConfigBytes: ByteArray? = null
+    private var pendingKeyframe = false
     private var frames = 0L
     private var bytes = 0L
     private var dropped = 0L
@@ -70,7 +75,10 @@ class NativeScreenEncoder(
             handle = createdHandle
             Log.i(TAG, "Native Engine encoder prepared: ${config.codecMime} " +
                 "${config.width}x${config.height}@${config.fps} bitrate=${config.bitrate}")
-            nativeGetInputSurface(createdHandle) ?: error("NDK encoder did not return an input Surface")
+            val surface = nativeGetInputSurface(createdHandle)
+                ?: error("NDK encoder did not return an input Surface")
+            inputSurface = surface
+            surface
         } catch (error: Throwable) {
             running.set(false)
             val current = handle
@@ -90,8 +98,9 @@ class NativeScreenEncoder(
     @Suppress("unused")
     private fun onNativeEncoded(data: ByteArray, presentationTimeUs: Long, nativeFlags: Int) {
         if (!running.get()) return
+        var requestDeferredKeyframe = false
         synchronized(outputLock) {
-            if (!running.get()) return
+            if (!running.get()) return@synchronized
 
             val isCodecConfig = (nativeFlags and 1) != 0
             val isKeyframe = (nativeFlags and 2) != 0
@@ -99,20 +108,42 @@ class NativeScreenEncoder(
                 // Cache even if transport.send() fails while the TV is offline.
                 codecConfigBytes = data.copyOf()
                 Log.i(TAG, "Native encoder codec config cached: ${data.size} bytes")
-                sendCodecConfigLocked()
-                return
+                if (pendingKeyframe) {
+                    pendingKeyframe = false
+                    requestDeferredKeyframe = true
+                }
+                if (!isKeyframe) {
+                    sendCodecConfigLocked()
+                    return@synchronized
+                }
+                // A combined config+IDR buffer already carries its own parameter
+                // sets. Sending the cached copy as well would duplicate CSD and
+                // can desynchronise strict TV decoders, so treat it as the IDR.
+            }
+
+            // Never release an IDR before parameter sets exist. The compatibility
+            // encoder drops these too; sending a bare IDR is a known green-screen
+            // trigger on TVs that require SPS/PPS in the format or in-band.
+            if (isKeyframe && codecConfigBytes == null) {
+                pendingKeyframe = true
+                Log.w(TAG, "Dropping native IDR until codec config is available")
+                return@synchronized
             }
 
             // Repeat parameter sets immediately before every IDR. This makes
             // recovery independent of whether the receiver saw the first CSD.
-            if (isKeyframe) sendCodecConfigLocked()
+            if (isKeyframe && !isCodecConfig) sendCodecConfigLocked()
 
             val flags = (
                 (if (isKeyframe) Constants.FLAG_KEYFRAME.toInt() else 0) or
                     (if (config.isGamingMode) Constants.FLAG_GAMING_MODE.toInt() else 0)
                 ).toByte()
+            if (frames < 8) {
+                Log.i(TAG, "Sending encoded frame bytes=${data.size} keyframe=$isKeyframe flags=$flags")
+            }
             sendPacketLocked(data, flags, countAsFrame = true)
         }
+        if (requestDeferredKeyframe) requestNativeKeyFrame()
     }
 
     private fun sendCodecConfigLocked() {
@@ -163,23 +194,38 @@ class NativeScreenEncoder(
         windowStart = now
     }
 
-    override fun requestKeyFrame() {
+    /** Ask MediaCodec for an IDR after replaying cached parameter sets. */
+    private fun requestNativeKeyFrame() {
         synchronized(nativeCallLock) {
             val current = handle
             if (current == 0L || !running.get()) return
             synchronized(outputLock) {
-                // The TCP connection callback requests a keyframe after reconnect.
-                // Replay cached codec config first, then ask MediaCodec for an IDR.
                 Log.i(TAG, "Keyframe requested; replaying cached codec config " +
                     "(${codecConfigBytes?.size ?: 0} bytes)")
                 sendCodecConfigLocked()
-                runCatching { nativeRequestKeyFrame(current) }
-                    .onFailure {
-                        Log.w(TAG, "Native keyframe request failed", it)
-                        onError("Could not request a fresh video keyframe")
-                    }
+            }
+            runCatching { nativeRequestKeyFrame(current) }
+                .onFailure {
+                    Log.w(TAG, "Native keyframe request failed", it)
+                    onError("Could not request a fresh video keyframe")
+                }
+        }
+    }
+
+    override fun requestKeyFrame() {
+        var requestNow = false
+        synchronized(outputLock) {
+            if (codecConfigBytes == null) {
+                // A reconnect or live reconfigure can request a keyframe before
+                // the native drain thread has delivered csd-0/1. Defer instead
+                // of emitting an IDR the TV cannot decode.
+                pendingKeyframe = true
+                Log.i(TAG, "Keyframe deferred until native codec config arrives")
+            } else {
+                requestNow = true
             }
         }
+        if (requestNow) requestNativeKeyFrame()
     }
 
     fun updateBitrate(bitrate: Int) {
@@ -202,6 +248,8 @@ class NativeScreenEncoder(
         }
         synchronized(outputLock) {
             codecConfigBytes = null
+            pendingKeyframe = false
         }
+        inputSurface = null
     }
 }

@@ -221,7 +221,8 @@ class PhoneStreamViewModel(application: Application) : AndroidViewModel(applicat
 
     private fun streamQualityChanged(a: StreamingSettings, b: StreamingSettings): Boolean =
         a.resolution != b.resolution || a.framerate != b.framerate ||
-            a.bitrate != b.bitrate || a.codec != b.codec
+            a.bitrate != b.bitrate || a.codec != b.codec ||
+            a.isGamingMode != b.isGamingMode
 
     /** Debounced so tapping through presets does not restart the encoder repeatedly. */
     private fun scheduleLiveQualityApply() {

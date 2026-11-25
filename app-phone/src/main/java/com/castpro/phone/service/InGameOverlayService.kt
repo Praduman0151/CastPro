@@ -51,7 +51,9 @@ class InGameOverlayService : Service() {
         overlayScope.launch {
             CastSessionBus.state.collect { telemetry ->
                 updateStats(
-                    latencyMs = 0f,
+                    // The phone has no receiver-to-sender latency channel yet.
+                    // Show FPS only rather than inventing a 0 ms measurement.
+                    latencyMs = -1f,
                     fps = telemetry.currentFps,
                     connected = telemetry.isReceiverConnected
                 )

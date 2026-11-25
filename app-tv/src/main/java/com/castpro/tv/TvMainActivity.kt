@@ -91,7 +91,10 @@ class TvMainActivity : ComponentActivity() {
                             android.util.Log.e("TvMainActivity", message)
                             runOnUiThread { viewModel.reportError(message) }
                         },
-                        clockOffsetProvider = { viewModel.currentClockOffsetNs() }
+                        clockOffsetProvider = { viewModel.currentClockOffsetNs() },
+                        onFrameRendered = {
+                            runOnUiThread { viewModel.markFrameRendered() }
+                        }
                     )
                     surfaceRenderer = renderer
 
@@ -110,9 +113,8 @@ class TvMainActivity : ComponentActivity() {
                                 surfaceRenderer?.onConfig(config)
                             },
                             onFrameReceived = { data, offset, length, timestampNano, isGamingMode, isCodecConfig, isKeyframe ->
-                                if (!isCodecConfig) {
-                                    viewModel.markVideoReceived()
-                                }
+                                // Do not reveal the video surface on packet arrival;
+                                // only a real rendered frame may hide the standby UI.
                                 surfaceRenderer?.onFrame(
                                     data,
                                     offset,

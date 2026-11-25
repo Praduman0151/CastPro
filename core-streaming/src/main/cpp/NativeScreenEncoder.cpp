@@ -89,28 +89,40 @@ void drain(Engine* e) {
         attached = true;
     }
     AMediaCodecBufferInfo info{};
+    int idleReports = 0;
     while (e->running.load()) {
         ssize_t index = AMediaCodec_dequeueOutputBuffer(e->codec, &info, 10000);
+        if (index == AMEDIACODEC_INFO_TRY_AGAIN_LATER) {
+            if (++idleReports <= 3) {
+                LOGI("No encoded output for 10s (idle report %d)", idleReports);
+            }
+            continue;
+        }
         if (index == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) {
             forwardCodecConfig(e, env);
             continue;
         }
         if (index == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) continue;
-        if (index >= 0) {
-            size_t capacity = 0;
-            uint8_t* data = AMediaCodec_getOutputBuffer(e->codec, index, &capacity);
-            if (data && info.size > 0 && info.offset >= 0 &&
-                static_cast<size_t>(info.offset + info.size) <= capacity) {
-                jint flags = 0;
-                // Use the raw MediaCodec flag values: the NDK keyframe enum is
-                // only declared for API 34+ while the value is stable at 1.
-                if (info.flags & 2) flags |= 1;  // CODEC_CONFIG -> CastPro config
-                if (info.flags & 1) flags |= 2;  // KEY_FRAME    -> CastPro IDR
-                deliver(e, env, data + info.offset, info.size,
-                        static_cast<jlong>(info.presentationTimeUs), flags);
-            }
-            AMediaCodec_releaseOutputBuffer(e->codec, index, false);
+        if (index < 0) {
+            LOGE("Encoder output error: %zd", index);
+            break;
         }
+        idleReports = 0;
+        size_t capacity = 0;
+        uint8_t* data = AMediaCodec_getOutputBuffer(e->codec, index, &capacity);
+        if (data && info.size > 0 && info.offset >= 0 &&
+            static_cast<size_t>(info.offset + info.size) <= capacity) {
+            jint flags = 0;
+            // Use the raw MediaCodec flag values: the NDK keyframe enum is
+            // only declared for API 34+ while the value is stable at 1.
+            if (info.flags & 2) flags |= 1;  // CODEC_CONFIG -> CastPro config
+            if (info.flags & 1) flags |= 2;  // KEY_FRAME    -> CastPro IDR
+            LOGI("Encoded output bytes=%zu flags=0x%x pts=%lld", info.size,
+                 info.flags, static_cast<long long>(info.presentationTimeUs));
+            deliver(e, env, data + info.offset, info.size,
+                    static_cast<jlong>(info.presentationTimeUs), flags);
+        }
+        AMediaCodec_releaseOutputBuffer(e->codec, index, false);
     }
     if (attached) e->vm->DetachCurrentThread();
 }
@@ -130,24 +142,41 @@ Java_com_castpro_core_streaming_encoder_NativeScreenEncoder_nativeStart(
     env->DeleteLocalRef(cls);
     e->codec = AMediaCodec_createEncoderByType(mime);
 
-    AMediaFormat* fmt = AMediaFormat_new();
-    AMediaFormat_setString(fmt, AMEDIAFORMAT_KEY_MIME, mime);
-    env->ReleaseStringUTFChars(mimeString, mime);
-    AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_WIDTH, width);
-    AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_HEIGHT, height);
-    AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_COLOR_FORMAT, 0x7F000789);
-    AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_BIT_RATE, bitrate);
-    AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_FRAME_RATE, fps);
-    AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_I_FRAME_INTERVAL, 1);
-    AMediaFormat_setInt32(fmt, "low-latency", 1);
-    AMediaFormat_setInt32(fmt, "priority", 0);
-    AMediaFormat_setInt32(fmt, "max-bframes", 0);
-    AMediaFormat_setInt32(fmt, "bitrate-mode", 1);
-    // Put VPS/SPS/PPS in front of every sync frame as a second line of
-    // defence for receivers that join mid-stream (matches the Kotlin path).
-    AMediaFormat_setInt32(fmt, "prepend-header-to-sync-frames", 1);
+    // MediaFormat.KEY_PREPEND_HEADER_TO_SYNC_FRAMES is
+    // "prepend-sps-pps-to-idr-frames". The previous "prepend-header-to-sync-frames"
+    // spelling was ignored by MediaCodec, so native IDRs had no in-band SPS/PPS.
+    auto buildFormat = [&](bool prependHeaders) {
+        AMediaFormat* format = AMediaFormat_new();
+        AMediaFormat_setString(format, AMEDIAFORMAT_KEY_MIME, mime);
+        AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_WIDTH, width);
+        AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_HEIGHT, height);
+        AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_COLOR_FORMAT, 0x7F000789);
+        AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_BIT_RATE, bitrate);
+        AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_FRAME_RATE, fps);
+        AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_I_FRAME_INTERVAL, 1);
+        AMediaFormat_setInt32(format, "low-latency", 1);
+        AMediaFormat_setInt32(format, "priority", 0);
+        AMediaFormat_setInt32(format, "max-bframes", 0);
+        AMediaFormat_setInt32(format, "bitrate-mode", 1);
+        if (prependHeaders) {
+            AMediaFormat_setInt32(format, "prepend-sps-pps-to-idr-frames", 1);
+        }
+        return format;
+    };
+
+    AMediaFormat* fmt = buildFormat(true);
     media_status_t status = e->codec ? AMediaCodec_configure(
         e->codec, fmt, nullptr, nullptr, AMEDIACODEC_CONFIGURE_FLAG_ENCODE) : AMEDIA_ERROR_UNKNOWN;
+    if (status != AMEDIA_OK) {
+        // Some encoders reject the prepend key even though they otherwise work.
+        // Retry with the conservative format instead of dropping the native path.
+        AMediaFormat_delete(fmt);
+        fmt = buildFormat(false);
+        LOGI("Retrying NDK encoder without prepend-header key: %d", status);
+        status = e->codec ? AMediaCodec_configure(
+            e->codec, fmt, nullptr, nullptr, AMEDIACODEC_CONFIGURE_FLAG_ENCODE) : AMEDIA_ERROR_UNKNOWN;
+    }
+    env->ReleaseStringUTFChars(mimeString, mime);
     AMediaFormat_delete(fmt);
     if (!e->codec || !e->callback || status != AMEDIA_OK ||
         AMediaCodec_createInputSurface(e->codec, &e->input) != AMEDIA_OK ||

@@ -76,6 +76,13 @@ class ScreenCaptureService : Service() {
     private var currentReceiverName: String = ""
     private var currentConfig: StreamConfig? = null
     private var currentStreamConfigPacket: StreamConfigPacket? = null
+    // Live quality changes run on the service coroutine; transport reconnect
+    // callbacks run on the TCP thread. Both touch the encoder/config pair, so
+    // serialize them to avoid stale keyframes and half-swapped pipelines.
+    private val pipelineLock = Any()
+    // Incremented on every START/STOP so a delayed main-thread teardown from
+    // an old session cannot stop the foreground service of a newer session.
+    @Volatile private var sessionGeneration = 0
     @Volatile private var currentRotationDegrees: Int = 0
 
     @Volatile
@@ -265,27 +272,9 @@ class ScreenCaptureService : Service() {
             appendStatus("applyLiveConfig ${width}x$height@${fps}fps ${bitrate / 1_000_000}M $codec")
             Log.i(tag, "Applying live quality: ${next.width}x${next.height}@${next.fps} $codec")
             try {
-                // Do NOT create a second VirtualDisplay from the same
-                // MediaProjection: Android rejects that even after release().
-                // Keep the display alive and swap the encoder's input surface.
-                val oldDisplay = virtualDisplay
-                encoder?.stop()
-                encoder = null
-
-                currentConfig = next
-                currentStreamConfigPacket = StreamConfigPacket(
-                    codec = com.castpro.core.common.model.VideoCodec.fromMime(codec),
-                    width = width,
-                    height = height,
-                    fps = fps,
-                    bitrate = bitrate,
-                    rotationDegrees = currentRotationDegrees,
-                    isGamingMode = isGamingMode
-                )
-                // The TV reconfigures its decoder on this packet, so send it
-                // before the first frame of the new pipeline.
-                sendStreamConfig()
-
+                // Prepare the replacement encoder first. If this fails the
+                // current stream keeps running instead of being left with no
+                // encoder and no capture surface.
                 val (enc, inputSurface) = ScreenEncoderFactory.prepare(
                     config = next,
                     transport = tcp,
@@ -300,42 +289,71 @@ class ScreenCaptureService : Service() {
                     },
                     onError = { message -> CastSessionBus.setError(message) }
                 )
-                encoder = enc
-                if (oldDisplay == null) {
-                    virtualDisplay = project.createVirtualDisplay(
-                        "CastPro-Display",
-                        width,
-                        height,
-                        dpi,
-                        DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                        inputSurface,
-                        null,
-                        null
-                    )
-                    if (virtualDisplay == null) {
-                        throw IllegalStateException("Could not create the capture display")
+                synchronized(pipelineLock) {
+                    if (!started.get() || !transportConnected ||
+                        mediaProjection !== project || transport !== tcp
+                    ) {
+                        runCatching { enc.stop() }
+                        throw IllegalStateException("Session changed while applying quality")
                     }
-                } else {
-                    // Same MediaProjection, but the capture display itself must
-                    // be resized. Swapping only the encoder surface left the
-                    // old-size mirror scaling into a new-size format, which the
-                    // TV saw as a horizontal shift. VirtualDisplay.resize()
-                    // keeps the mirror geometry in step with the encoder.
-                    runCatching { oldDisplay.resize(width, height, dpi) }
-                        .onFailure { Log.w(tag, "VirtualDisplay.resize was rejected", it) }
-                    oldDisplay.setSurface(inputSurface)
-                    virtualDisplay = oldDisplay
-                    // Keep rotation metadata aligned with the new pipeline.
-                    resolutionMonitor?.checkAndNotifyGeometry(force = true)
+
+                    // Do NOT create a second VirtualDisplay from the same
+                    // MediaProjection: Android rejects that even after release().
+                    // Keep the display alive and swap the encoder's input surface.
+                    val oldDisplay = virtualDisplay
+                    encoder?.stop()
+                    encoder = enc
+
+                    currentConfig = next
+                    currentStreamConfigPacket = StreamConfigPacket(
+                        codec = com.castpro.core.common.model.VideoCodec.fromMime(codec),
+                        width = width,
+                        height = height,
+                        fps = fps,
+                        bitrate = bitrate,
+                        rotationDegrees = currentRotationDegrees,
+                        isGamingMode = isGamingMode
+                    )
+                    // The TV reconfigures its decoder on this packet, so send it
+                    // before the first frame of the new pipeline.
+                    sendStreamConfig()
+
+                    if (oldDisplay == null) {
+                        virtualDisplay = project.createVirtualDisplay(
+                            "CastPro-Display",
+                            width,
+                            height,
+                            dpi,
+                            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                            inputSurface,
+                            null,
+                            null
+                        )
+                        if (virtualDisplay == null) {
+                            throw IllegalStateException("Could not create the capture display")
+                        }
+                    } else {
+                        // Same MediaProjection, but the capture display itself must
+                        // be resized. Swapping only the encoder surface left the
+                        // old-size mirror scaling into a new-size format, which the
+                        // TV saw as a horizontal shift. VirtualDisplay.resize()
+                        // keeps the mirror geometry in step with the encoder.
+                        runCatching { oldDisplay.resize(width, height, dpi) }
+                            .onFailure { Log.w(tag, "VirtualDisplay.resize was rejected", it) }
+                        oldDisplay.setSurface(inputSurface)
+                        virtualDisplay = oldDisplay
+                        // Keep rotation metadata aligned with the new pipeline.
+                        resolutionMonitor?.checkAndNotifyGeometry(force = true)
+                    }
+                    sendHeartbeat(tcp)
+                    enc.requestKeyFrame()
+                    CastSessionBus.setError(null)
+                    updateNotification("Streaming ${width}×${height} @ ${fps}FPS • quality updated")
+                    CastSessionBus.setAppliedQuality(
+                        "${width}x${height} · ${fps} fps · ${codec.substringAfterLast('/').uppercase()}"
+                    )
+                    appendStatus("applyLiveConfig done")
                 }
-                sendHeartbeat(tcp)
-                enc.requestKeyFrame()
-                CastSessionBus.setError(null)
-                updateNotification("Streaming ${width}×${height} @ ${fps}FPS • quality updated")
-                CastSessionBus.setAppliedQuality(
-                    "${width}x${height} · ${fps} fps · ${codec.substringAfterLast('/').uppercase()}"
-                )
-                appendStatus("applyLiveConfig done")
             } catch (e: Exception) {
                 Log.e(tag, "Could not apply live quality change", e)
                 CastSessionBus.setAppliedQuality(null)
@@ -366,6 +384,7 @@ class ScreenCaptureService : Service() {
     ) {
         // A previous run leaves `stopping` set; clear it before claiming a new session.
         stopping.set(false)
+        val generation = ++sessionGeneration
         appendStatus("startStreamingWithProjection entered")
         if (!started.compareAndSet(false, true)) {
             // A second start while a session is running: replace the old one.
@@ -418,6 +437,7 @@ class ScreenCaptureService : Service() {
         }
 
         serviceScope.launch {
+            if (generation != sessionGeneration) return@launch
             try {
                 val config = StreamConfig(
                     width = width,
@@ -602,11 +622,15 @@ class ScreenCaptureService : Service() {
                 currentHost,
                 currentReceiverName.takeIf { it.isNotBlank() }
             )
-            sendStreamConfig()
-            // Calibrate the TV's clock offset immediately, before the first
-            // latency sample is reported.
-            transport?.let { sendHeartbeat(it) }
-            encoder?.requestKeyFrame()
+            synchronized(pipelineLock) {
+                sendStreamConfig()
+                // Calibrate the TV's clock offset immediately, before the first
+                // latency sample is reported.
+                transport?.let { sendHeartbeat(it) }
+                // requestKeyFrame() waits for native CSD when the encoder has
+                // just been recreated, so reconnect cannot emit a bare IDR.
+                encoder?.requestKeyFrame()
+            }
             val name = currentReceiverName.takeIf { it.isNotBlank() }
                 ?: currentHost.takeIf { it.isNotBlank() }
             updateNotification("Connected to TV${name?.let { " ($it)" } ?: ""}")
@@ -728,6 +752,7 @@ class ScreenCaptureService : Service() {
 
     private fun stopStreaming(failure: String? = null) {
         if (!stopping.compareAndSet(false, true)) return
+        val generation = ++sessionGeneration
         val failedHost = currentHost
         val failedName = currentReceiverName
         Log.i(tag, "Stopping screen casting${failure?.let { ": $it" } ?: ""}")
@@ -786,10 +811,13 @@ class ScreenCaptureService : Service() {
             // post them so a background (IO) teardown cannot trigger an ANR or
             // a CalledFromWrongThread crash.
             Handler(Looper.getMainLooper()).post {
-                stopForegroundCompat()
-                stopSelf()
+                // A new START may already own the service; do not tear it down.
+                if (generation == sessionGeneration) {
+                    stopForegroundCompat()
+                    stopSelf()
+                }
             }
-            started.set(false)
+            if (generation == sessionGeneration) started.set(false)
         }
     }
 

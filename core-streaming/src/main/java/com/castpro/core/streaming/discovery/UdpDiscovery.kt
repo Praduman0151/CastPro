@@ -49,10 +49,7 @@ class UdpDiscoveryClient(
     private fun runLoop() {
         try {
             val selectedNetwork = LocalNetwork.activeLanNetwork(appContext)
-            val udp = DatagramSocket(null).apply {
-                broadcast = true
-                soTimeout = 500
-            }
+            val udp = DatagramSocket(null)
             // Network.bindSocket must happen before bind/connect. The socket
             // then uses the selected Wi-Fi/Ethernet route even if a VPN or
             // auxiliary interface is the process default.
@@ -60,6 +57,11 @@ class UdpDiscoveryClient(
                 selectedNetwork.bindSocket(udp)
             }
             udp.bind(InetSocketAddress(0))
+            // Set SO_BROADCAST after binding: Network.bindSocket() can reset
+            // socket options, and OnePlus/vgate0 rejects broadcast probes with
+            // EPERM when the flag is applied only before the bind.
+            udp.broadcast = true
+            udp.soTimeout = 500
             boundNetwork = selectedNetwork
             socket = udp
             while (running.get()) {
@@ -91,15 +93,18 @@ class UdpDiscoveryClient(
     private fun sendProbe(udp: DatagramSocket) {
         val request = Constants.DISCOVERY_REQUEST.toByteArray()
         val targets = LocalNetwork.broadcastAddresses(appContext, boundNetwork)
+        var delivered = false
         synchronized(sendLock) {
             for (target in targets) {
                 try {
                     udp.send(DatagramPacket(request, request.size, target, Constants.DEFAULT_DISCOVERY_PORT))
+                    delivered = true
                 } catch (e: Exception) {
                     Log.d(tag, "Probe to $target failed: ${e.message}")
                 }
             }
         }
+        if (delivered) reportedError = false
     }
 
     private fun handlePacket(packet: DatagramPacket) {

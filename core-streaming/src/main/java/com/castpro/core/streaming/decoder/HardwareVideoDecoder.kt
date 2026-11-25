@@ -30,6 +30,9 @@ class HardwareVideoDecoder(
     private var mediaCodec: MediaCodec? = null
     private val running = AtomicBoolean(false)
     private var waitingForKeyframe = true
+    // MediaCodec loses codec-specific data on flush/reconfigure/restart. Keep
+    // the last SPS/PPS (or VPS/SPS/PPS) so every new codec can be primed.
+    private var cachedCodecConfig: ByteArray? = null
 
     private var frameCount = 0
     private var bytesInWindow = 0L
@@ -73,6 +76,7 @@ class HardwareVideoDecoder(
             }
             Log.i(tag, "Reconfiguring decoder: ${newConfig.codecMime} ${newConfig.width}x${newConfig.height}")
             stopCodec()
+            cachedCodecConfig = null
             config = newConfig
             // Reset telemetry to the new configuration instead of showing the
             // previous resolution until the next output-format callback.
@@ -131,6 +135,9 @@ class HardwareVideoDecoder(
                 codec.start()
                 mediaCodec = codec
                 waitingForKeyframe = true
+                cachedCodecConfig?.let { configBytes ->
+                    queueCodecConfig(codec, configBytes, 0, configBytes.size)
+                }
                 resetMetrics()
                 Log.i(
                     tag,
@@ -167,9 +174,39 @@ class HardwareVideoDecoder(
     fun reset() {
         synchronized(lock) {
             runCatching { mediaCodec?.flush() }
+            // flush() discards codec-specific data on many frameworks.
+            mediaCodec?.let { codec ->
+                cachedCodecConfig?.let { configBytes ->
+                    queueCodecConfig(codec, configBytes, 0, configBytes.size)
+                }
+            }
             waitingForKeyframe = true
             resetMetrics()
         }
+    }
+
+    private fun queueCodecConfig(codec: MediaCodec, data: ByteArray, offset: Int, length: Int): Boolean {
+        if (length <= 0 || offset < 0 || offset > data.size - length) return false
+        val inputIndex = codec.dequeueInputBuffer(10_000)
+        if (inputIndex < 0) {
+            Log.w(tag, "No input buffer available to resubmit codec config")
+            return false
+        }
+        val buffer = codec.getInputBuffer(inputIndex)
+        if (buffer == null || length > buffer.remaining()) {
+            Log.w(tag, "Cannot resubmit codec config: buffer unavailable or too small")
+            codec.queueInputBuffer(inputIndex, 0, 0, System.nanoTime() / 1_000L, 0)
+            return false
+        }
+        buffer.put(data, offset, length)
+        codec.queueInputBuffer(
+            inputIndex,
+            0,
+            length,
+            System.nanoTime() / 1_000L,
+            MediaCodec.BUFFER_FLAG_CODEC_CONFIG
+        )
+        return true
     }
 
     fun decodeFrame(
@@ -206,9 +243,17 @@ class HardwareVideoDecoder(
             if (!running.get()) return
 
             try {
+                if (isCodecConfig) {
+                    if (length > 0 && offset >= 0 && offset <= data.size - length) {
+                        cachedCodecConfig = data.copyOfRange(offset, offset + length)
+                    }
+                    queueCodecConfig(codec, data, offset, length)
+                    return
+                }
+
                 // Parameter sets are safe (and necessary) before the first IDR.
                 // Queue them even while waiting, but keep waiting for a real IDR.
-                if (waitingForKeyframe && !isCodecConfig && !keyFrame) return
+                if (waitingForKeyframe && !keyFrame) return
 
                 // Never block the network thread waiting for an input buffer.
                 // A late frame is worthless in a low-latency cast; dropping it
@@ -241,16 +286,12 @@ class HardwareVideoDecoder(
                     return
                 }
                 inputBuffer.put(data, offset, length)
-                // Parameter sets must be flagged as codec config or decoders
-                // on many TVs reject the following IDR.
-                val codecFlags = if (isCodecConfig) MediaCodec.BUFFER_FLAG_CODEC_CONFIG else 0
                 // MediaCodec presentation times must come from a monotonic
                 // clock. The phone's wall-clock stamp is only for latency
                 // reporting; feeding it here makes SurfaceFlinger delay frames
                 // and the picture appears to run in slow motion.
-                codec.queueInputBuffer(inputIndex, 0, length, presentationTimeUs, codecFlags)
-                if (!isCodecConfig && keyFrame) waitingForKeyframe = false
-                drainOutput(codec, timestampNano, isGamingMode)
+                codec.queueInputBuffer(inputIndex, 0, length, presentationTimeUs, 0)
+                if (keyFrame) waitingForKeyframe = false
             } catch (e: Throwable) {
                 Log.e(tag, "Decode error", e)
                 // Once MediaCodec throws, its state is not trustworthy. Stop it
@@ -259,6 +300,14 @@ class HardwareVideoDecoder(
                 stopCodec()
                 waitingForKeyframe = true
                 onError(e.message ?: "Video decoder error")
+            } finally {
+                // Output can be produced after an earlier input queue operation,
+                // not only after the most recent successful queue. Draining here
+                // prevents already-decoded frames from sitting unrendered while
+                // the network thread waits for the next packet.
+                if (running.get() && mediaCodec === codec) {
+                    drainOutput(codec, timestampNano, isGamingMode)
+                }
             }
         }
     }
@@ -287,8 +336,12 @@ class HardwareVideoDecoder(
                     "Decoded output #$loggedOutputBuffers size=${info.size} flags=${info.flags} ptsUs=${info.presentationTimeUs}"
                 )
             }
-            codec.releaseOutputBuffer(outputIndex, true)
-            frameCount++
+            val isConfigOutput = (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
+            // Empty/config buffers are not pictures. Rendering them produces a
+            // blank/green TextureView update and inflates the FPS counter.
+            val render = info.size > 0 && !isConfigOutput
+            codec.releaseOutputBuffer(outputIndex, render)
+            if (render) frameCount++
 
             val nowMs = System.currentTimeMillis()
             if (nowMs - lastFpsTimestamp >= 1_000) {

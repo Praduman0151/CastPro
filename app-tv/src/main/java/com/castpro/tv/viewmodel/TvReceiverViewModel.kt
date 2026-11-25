@@ -84,7 +84,11 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
     fun noteHeartbeat(senderTimestampNs: Long) {
         if (senderTimestampNs <= 0L) return
         val receiveNs = System.currentTimeMillis() * 1_000_000L
-        clockOffsetNs = receiveNs - senderTimestampNs - ASSUMED_ONE_WAY_NS
+        // Do not subtract a fixed "typical" one-way delay: that fabricated a
+        // permanent 2 ms floor in the HUD. The heartbeat gives us only the
+        // clock skew; the remaining difference to a video packet is the live
+        // one-way latency estimate.
+        clockOffsetNs = receiveNs - senderTimestampNs
     }
 
     private var onStreamConfig: ((StreamConfigPacket) -> Unit)? = null
@@ -324,11 +328,11 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     /**
-     * Only real video packets mark the receiver as streaming. This keeps the
-     * TV status consistent with what the viewer actually sees, even if the
-     * phone reconnects its socket before the encoder is ready.
+     * Only a real decoded frame rendered into the TextureView marks the
+     * receiver as streaming. Packet arrival alone can reveal an unrendered
+     * green surface, which is exactly the symptom reported in issue #7.
      */
-    fun markVideoReceived() {
+    fun markFrameRendered() {
         var changed = false
         _uiState.update { state ->
             if (state.isStreaming && state.connectionStatus == "Streaming") {
@@ -339,7 +343,7 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
             }
         }
         if (changed) {
-            android.util.Log.i("TvConnection", "Video packets arrived; receiver is streaming")
+            android.util.Log.i("TvConnection", "First rendered frame reached the receiver surface")
         }
     }
 
@@ -407,8 +411,6 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     companion object {
-        /** Typical LAN delivery time used to separate clock skew from latency. */
-        private const val ASSUMED_ONE_WAY_NS = 2_000_000L
         private const val KEY_DISPLAY_MODE = "display_mode"
         private const val KEY_COLOR_FILTER = "color_filter"
         private const val KEY_COMPACT_HUD = "compact_hud"
