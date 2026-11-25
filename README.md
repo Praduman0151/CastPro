@@ -8,7 +8,7 @@ CastPro captures the phone display with `MediaProjection`, encodes it with `Medi
 
 ## Current release
 
-Latest release: [v1.0.4](https://github.com/Praduman0151/CastPro/releases/tag/v1.0.4)
+Latest release: [v1.0.5](https://github.com/Praduman0151/CastPro/releases/tag/v1.0.5)
 
 Attached debug APKs:
 
@@ -51,7 +51,7 @@ Attached debug APKs:
 
 Video, audio, heartbeat, geometry and stream configuration use one compact binary protocol over TCP. The TV renderer applies the selected display transform to the decoded frame; it does not change the capture resolution to fake full screen.
 
-## Experimental work, not active in v1.0.4
+## Experimental work, not active in v1.0.5
 
 - `UdpVideoStreamTransport` and `UdpVideoReceiver` are isolated prototypes for fragmenting/reassembling video datagrams. TCP remains the production path; UDP is **not** wired into the live session.
 - `docs/USB_CASTING_DESIGN.md` describes USB **network** transport only. It is not a claim of USB-C DisplayPort / HDMI video output, and no wired mode is enabled.
@@ -95,7 +95,7 @@ ADB may be used to install or debug development builds. It is never used as the 
 
 ## Verification status
 
-- CI compilation: passing for v1.0.4.
+- CI compilation: passing for v1.0.5.
 - Earlier Phase 1 layout work recorded 20 consecutive quality changes with no root-layout or surface-bound movement.
 - The current full-screen Stretch acceptance test with PUBG Mobile on a OnePlus Nord 5 and TCL Android TV is still pending because Wi-Fi was unavailable during the release session.
 - HEVC, 1440p and 120 FPS depend on device capability and are not claimed as verified on the current TV.
