@@ -9,3 +9,5 @@ build-artifacts/
 .cxx
 capture
 .kotlin/
+*.jks
+*.keystore
