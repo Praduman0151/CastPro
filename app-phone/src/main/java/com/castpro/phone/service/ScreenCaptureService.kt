@@ -30,7 +30,8 @@ import com.castpro.core.common.protocol.Constants
 import com.castpro.core.common.protocol.PacketHeader
 import com.castpro.core.common.protocol.StreamConfigPacket
 import com.castpro.core.streaming.audio.GameAudioCapture
-import com.castpro.core.streaming.encoder.HardwareScreenEncoder
+import com.castpro.core.streaming.encoder.ScreenEncoderBackend
+import com.castpro.core.streaming.encoder.ScreenEncoderFactory
 import com.castpro.core.streaming.monitor.ScreenResolutionMonitor
 import com.castpro.core.streaming.monitor.ScreenWakeLock
 import com.castpro.core.streaming.network.LocalNetwork
@@ -58,7 +59,7 @@ class ScreenCaptureService : Service() {
 
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
-    private var encoder: HardwareScreenEncoder? = null
+    private var encoder: ScreenEncoderBackend? = null
     private var audioCapture: GameAudioCapture? = null
     private var transport: StreamTransport? = null
     private var resolutionMonitor: ScreenResolutionMonitor? = null
@@ -285,7 +286,7 @@ class ScreenCaptureService : Service() {
                 // before the first frame of the new pipeline.
                 sendStreamConfig()
 
-                val enc = HardwareScreenEncoder(
+                val (enc, inputSurface) = ScreenEncoderFactory.prepare(
                     config = next,
                     transport = tcp,
                     onStats = { stats ->
@@ -299,8 +300,6 @@ class ScreenCaptureService : Service() {
                     },
                     onError = { message -> CastSessionBus.setError(message) }
                 )
-                val inputSurface = enc.prepare()
-                enc.start()
                 encoder = enc
                 if (oldDisplay == null) {
                     virtualDisplay = project.createVirtualDisplay(
@@ -495,7 +494,7 @@ class ScreenCaptureService : Service() {
                     startHeartbeatLoop(tcp)
 
                     try {
-                        val enc = HardwareScreenEncoder(
+                        val (enc, inputSurface) = ScreenEncoderFactory.prepare(
                             config = config,
                             transport = tcp,
                             onStats = { stats ->
@@ -509,8 +508,6 @@ class ScreenCaptureService : Service() {
                             },
                             onError = { message -> CastSessionBus.setError(message) }
                         )
-                        val inputSurface = enc.prepare()
-                        enc.start()
                         encoder = enc
                         virtualDisplay = project.createVirtualDisplay(
                             "CastPro-Display",

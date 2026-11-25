@@ -33,7 +33,7 @@ class HardwareScreenEncoder(
     private val packetListener: StreamPacketListener? = null,
     private val onStats: ((EncoderStats) -> Unit)? = null,
     private val onError: (String) -> Unit = {}
-) {
+) : ScreenEncoderBackend {
     private val tag = "HardwareScreenEncoder"
     private var mediaCodec: MediaCodec? = null
     private var inputSurface: Surface? = null
@@ -56,7 +56,7 @@ class HardwareScreenEncoder(
     private var windowBytes = 0L
     private var windowStartMs = System.currentTimeMillis()
 
-    fun prepare(): Surface {
+    override fun prepare(): Surface {
         val codec = createConfiguredEncoder()
         val surface = codec.createInputSurface()
         mediaCodec = codec
@@ -114,7 +114,7 @@ class HardwareScreenEncoder(
         }
     }
 
-    fun start() {
+    override fun start() {
         val codec = mediaCodec ?: throw IllegalStateException("Encoder not prepared")
         codec.start()
         isRunning.set(true)
@@ -254,7 +254,7 @@ class HardwareScreenEncoder(
     }
 
     /** Ask the codec for an IDR so a reconnected TV can start cleanly. */
-    fun requestKeyFrame() {
+    override fun requestKeyFrame() {
         // The new socket may have joined after MediaCodec emitted its output
         // format. Send the stored parameter sets before the IDR.
         sendCodecConfig()
@@ -269,7 +269,7 @@ class HardwareScreenEncoder(
         }
     }
 
-    fun stop() {
+    override fun stop() {
         isRunning.set(false)
         encoderThread?.interrupt()
         try {

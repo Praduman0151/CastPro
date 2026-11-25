@@ -112,6 +112,7 @@ ADB may be used to install or debug development builds. It is never used as the 
 - [Ultra transport experiment](docs/CASTPRO_ULTRA_TRANSPORT.md)
 - [USB casting design](docs/USB_CASTING_DESIGN.md)
 - [Neon UI upgrade notes](docs/NEON_FULL_UPGRADE.md)
+- [Native Engine 2.0 gaming track](docs/NATIVE_ENGINE_2_0.md) — experimental NDK encoder; device validation pending
 
 ## License
 

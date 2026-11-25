@@ -27,6 +27,11 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
+      - name: Install native build toolchain
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018" "cmake;3.22.1"
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
