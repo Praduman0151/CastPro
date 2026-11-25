@@ -28,7 +28,7 @@ class TvTextureRenderer(
     initialDisplayMode: TvDisplayMode,
     private val onMetricsUpdated: (LatencyMetrics) -> Unit,
     private val onError: (String) -> Unit = {},
-    private val clockOffsetProvider: () -> Long = { 0L }
+    private val clockOffsetProvider: () -> Long? = { null }
 ) : TextureView.SurfaceTextureListener {
 
     private val tag = "TvTextureRenderer"
@@ -36,6 +36,7 @@ class TvTextureRenderer(
     private var displayMode: TvDisplayMode = initialDisplayMode
     private var decoder: HardwareVideoDecoder? = null
     private var outputSurface: Surface? = null
+    private var renderedFrameUpdates = 0
     var isSurfaceReady = false
         private set
 
@@ -63,7 +64,12 @@ class TvTextureRenderer(
         applyTransform(width, height)
     }
 
-    override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) = Unit
+    override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) {
+        renderedFrameUpdates++
+        if (renderedFrameUpdates == 1) {
+            Log.i(tag, "First decoded frame reached the TextureView surface")
+        }
+    }
 
     override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
         isSurfaceReady = false
