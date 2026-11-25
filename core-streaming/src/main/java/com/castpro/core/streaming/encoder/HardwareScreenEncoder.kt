@@ -170,6 +170,20 @@ class HardwareScreenEncoder(
                     val payload = ByteArray(bufferInfo.size)
                     encodedData.get(payload)
 
+                    // A receiver must have SPS/PPS (or VPS/SPS/PPS) before an
+                    // IDR. The first connection can race the encoder's
+                    // INFO_OUTPUT_FORMAT_CHANGED callback; never send an IDR
+                    // ahead of the codec config packet.
+                    if (isKeyframe) {
+                        if (codecConfigBytes == null) {
+                            Log.w(tag, "Dropping IDR until encoder codec config is available")
+                            codec.releaseOutputBuffer(outputIndex, false)
+                            reportStatsIfNeeded()
+                            continue
+                        }
+                        sendCodecConfig()
+                    }
+
                     val delivered = transport?.send(header, payload) ?: true
                     if (delivered) {
                         framesSent++
