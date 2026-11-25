@@ -44,7 +44,7 @@ data class TvUiState(
     val showHudOverlay: Boolean = true,
     val showSettingsPanel: Boolean = false,
     val compactHud: Boolean = false,
-    val displayMode: TvDisplayMode = TvDisplayMode.FULL,
+    val displayMode: TvDisplayMode = TvDisplayMode.STRETCH,
     val colorFilter: TvColorFilter = TvColorFilter.STANDARD,
     val connectionError: String? = null,
     val isServerRunning: Boolean = false,
@@ -96,10 +96,12 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
             it.copy(
                 serviceName = defaultServiceName(),
                 displayMode = runCatching {
-                    TvDisplayMode.valueOf(
-                        prefs.getString(KEY_DISPLAY_MODE, TvDisplayMode.FULL.name) ?: TvDisplayMode.FULL.name
-                    )
-                }.getOrDefault(TvDisplayMode.FULL),
+                    when (val saved = prefs.getString(KEY_DISPLAY_MODE, TvDisplayMode.STRETCH.name)) {
+                        // Legacy crop/zoom presets are replaced by true stretch.
+                        "FULL", "ZOOM" -> TvDisplayMode.STRETCH
+                        else -> saved?.let { TvDisplayMode.valueOf(it) } ?: TvDisplayMode.STRETCH
+                    }
+                }.getOrDefault(TvDisplayMode.STRETCH),
                 colorFilter = runCatching {
                     TvColorFilter.valueOf(
                         prefs.getString(KEY_COLOR_FILTER, TvColorFilter.STANDARD.name) ?: TvColorFilter.STANDARD.name

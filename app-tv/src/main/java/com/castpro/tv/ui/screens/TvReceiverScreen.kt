@@ -1,6 +1,6 @@
 package com.castpro.tv.ui.screens
 
-import android.view.SurfaceView
+import android.view.TextureView
 import android.view.ViewGroup
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -28,7 +28,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -45,7 +44,7 @@ import com.castpro.tv.viewmodel.TvUiState
 @Composable
 fun TvReceiverScreen(
     state: TvUiState,
-    onSurfaceCreated: (SurfaceView) -> Unit,
+    onSurfaceCreated: (TextureView) -> Unit,
     onDismissCrash: () -> Unit = {},
     onDisplayModeChanged: (TvDisplayMode) -> Unit = {},
     onColorFilterChanged: (TvColorFilter) -> Unit = {},
@@ -55,44 +54,18 @@ fun TvReceiverScreen(
     onToggleCompactHud: () -> Unit = {},
     onResetServer: () -> Unit = {}
 ) {
-    val tvAspect = 16f / 9f
-    // The encoder always emits streamConfig.width x streamConfig.height. Use
-    // that stable value for layout; phone sensor geometry is portrait and made
-    // the whole cast jump sideways whenever quality was reconfigured.
-    val streamAspect = if (state.streamConfig.height > 0) {
-        (state.streamConfig.width.toFloat() / state.streamConfig.height).coerceIn(0.4f, 3f)
-    } else {
-        16f / 9f
-    }
-
-    // Keep the decoder surface inside the panel for Fit, but let Full/Stretch/
-    // Zoom use the whole window. Never derive this from phone sensor geometry.
-    val surfaceModifier = when (state.displayMode) {
-        TvDisplayMode.FIT -> Modifier
-            .aspectRatio(streamAspect)
-            .fillMaxSize()
-        TvDisplayMode.FULL -> Modifier.fillMaxSize()
-        TvDisplayMode.STRETCH -> {
-            val scaleX = if (streamAspect < tvAspect) tvAspect / streamAspect else 1f
-            val scaleY = if (streamAspect > tvAspect) streamAspect / tvAspect else 1f
-            Modifier
-                .fillMaxSize()
-                .graphicsLayer(scaleX = scaleX, scaleY = scaleY, clip = true)
-        }
-        TvDisplayMode.ZOOM -> Modifier
-            .fillMaxSize()
-            .graphicsLayer(scaleX = 1.18f, scaleY = 1.18f, clip = true)
-    }
-
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black),
         contentAlignment = Alignment.Center
     ) {
+        // The view is always the full panel. The renderer applies the selected
+        // transform matrix to the decoded frame; STRETCH uses separate X/Y
+        // scales, so the picture can never leave unused black bars.
         AndroidView(
             factory = { context ->
-                SurfaceView(context).apply {
+                TextureView(context).apply {
                     layoutParams = ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT
@@ -100,7 +73,7 @@ fun TvReceiverScreen(
                     onSurfaceCreated(this)
                 }
             },
-            modifier = surfaceModifier
+            modifier = Modifier.fillMaxSize()
         )
 
         // GPU-composited colour treatment. Placed above the video surface but
@@ -424,7 +397,7 @@ private fun TvCastSettingsPanel(
         )
         Text(
             text = "Stream shape ${String.format("%.2f", settingsAspect)}:1 · " +
-                "Full crops the edges, Fit keeps black bars, Stretch forces 16:9.",
+                "Stretch fills every pixel, Fit keeps black bars, Fill crops the edges.",
             color = Color.Gray,
             fontSize = 11.sp
         )

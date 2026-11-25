@@ -2,6 +2,7 @@ package com.castpro.tv
 
 import android.os.Bundle
 import android.view.KeyEvent
+import android.view.TextureView
 import android.view.ViewTreeObserver
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -15,13 +16,13 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.runtime.getValue
 import com.castpro.core.common.model.StreamConfig
 import com.castpro.core.streaming.audio.TvAudioPlayer
-import com.castpro.tv.render.TvSurfaceRenderer
+import com.castpro.tv.render.TvTextureRenderer
 import com.castpro.tv.ui.screens.TvReceiverScreen
 import com.castpro.tv.viewmodel.TvReceiverViewModel
 
 class TvMainActivity : ComponentActivity() {
     private val viewModel: TvReceiverViewModel by viewModels()
-    private var surfaceRenderer: TvSurfaceRenderer? = null
+    private var surfaceRenderer: TvTextureRenderer? = null
     private var audioPlayer: TvAudioPlayer? = null
     private var serverStarted = false
     private var rootLayoutListener: ViewTreeObserver.OnGlobalLayoutListener? = null
@@ -52,10 +53,10 @@ class TvMainActivity : ComponentActivity() {
 
         setContent {
             val state by viewModel.uiState.collectAsState()
-            // Apply display-mode changes to the live decoder without restarting
-            // the stream. Cropping/fit is a MediaCodec surface transform.
+            // Apply display-mode changes to the live decoder and its texture
+            // matrix without restarting the stream.
             LaunchedEffect(state.displayMode) {
-                surfaceRenderer?.setVideoScalingMode(state.displayMode.scalingMode)
+                surfaceRenderer?.setDisplayMode(state.displayMode)
             }
             TvReceiverScreen(
                 state = state,
@@ -67,20 +68,20 @@ class TvMainActivity : ComponentActivity() {
                 onToggleSettings = { viewModel.toggleSettingsPanel() },
                 onToggleCompactHud = { viewModel.toggleCompactHud() },
                 onResetServer = { viewModel.resetServer() },
-                onSurfaceCreated = { surfaceView ->
-                    surfaceView.addOnLayoutChangeListener { view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+                onSurfaceCreated = { textureView ->
+                    textureView.addOnLayoutChangeListener { view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
                         if (left != oldLeft || top != oldTop || right != oldRight || bottom != oldBottom) {
                             android.util.Log.i(
                                 "TvLayout",
-                                "SurfaceView bounds=${right - left}x${bottom - top} " +
+                                "Video bounds=${right - left}x${bottom - top} " +
                                     "l=$left t=$top r=$right b=$bottom"
                             )
                         }
                     }
-                    val renderer = TvSurfaceRenderer(
-                        surfaceView = surfaceView,
+                    val renderer = TvTextureRenderer(
+                        textureView = textureView,
                         initialConfig = viewModel.uiState.value.streamConfig,
-                        initialScalingMode = viewModel.uiState.value.displayMode.scalingMode,
+                        initialDisplayMode = viewModel.uiState.value.displayMode,
                         onMetricsUpdated = { metrics ->
                             runOnUiThread { viewModel.updateMetrics(metrics) }
                         },

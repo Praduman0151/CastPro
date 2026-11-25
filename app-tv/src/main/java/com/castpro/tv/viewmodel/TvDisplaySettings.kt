@@ -7,34 +7,33 @@ import androidx.compose.ui.graphics.Color
 /**
  * How the decoded frame is placed on the TV panel.
  *
- * The scalingMode is applied directly to MediaCodec. SCALE_TO_FIT_WITH_CROPPING
- * is what actually removes black bars from wide phone/game frames: the decoder
- * fills the SurfaceView and crops the overflow instead of letterboxing it.
+ * STRETCH is the default. It maps the full decoded frame to the full display
+ * with independent X and Y scales, so there are no black bars and no crop,
+ * even when the phone's frame and the TV panel have different shapes. The
+ * decoder itself is kept in SCALE_TO_FIT so it never crops before that matrix.
+ *
+ * FIT and FILL use a uniform scale: FIT keeps the whole frame (bars allowed),
+ * FILL crops the overflow. None of these modes change the capture resolution.
  */
 enum class TvDisplayMode(
     val label: String,
     val scalingMode: Int,
     val description: String
 ) {
+    STRETCH(
+        "Stretch",
+        MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT,
+        "Full screen, no bars, no crop (distorts to fit)"
+    ),
     FIT(
         "Fit",
         MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT,
         "Whole frame, black bars kept"
     ),
-    FULL(
-        "Full",
+    FILL(
+        "Fill",
         MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING,
         "Fill the TV, crop the edges"
-    ),
-    STRETCH(
-        "Stretch",
-        MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT,
-        "Force 16:9, some distortion"
-    ),
-    ZOOM(
-        "Zoom",
-        MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING,
-        "Fill and zoom in slightly"
     )
 }
 
