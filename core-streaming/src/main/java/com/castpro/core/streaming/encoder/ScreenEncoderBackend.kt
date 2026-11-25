@@ -29,10 +29,11 @@ object ScreenEncoderFactory {
                 // Keep construction inside the guarded block: the class initializer
                 // loads the JNI library and can throw UnsatisfiedLinkError before
                 // prepare() is reached on devices/ABIs without the native binary.
-                native = NativeScreenEncoder(config, transport, onStats, onError)
-                val surface = native.prepare()
-                native.start()
-                return native to surface
+                val candidate = NativeScreenEncoder(config, transport, onStats, onError)
+                native = candidate
+                val surface = candidate.prepare()
+                candidate.start()
+                return candidate to surface
             } catch (error: LinkageError) {
                 native?.stop()
                 android.util.Log.w(
