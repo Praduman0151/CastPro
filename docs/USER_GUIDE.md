@@ -1,113 +1,95 @@
-# Cast Pro — Executive User Guide
+# CastPro — User Guide
 
-**From the Desk of the Lead Manager & CEO**  
-*Cast Pro Suite (v1.1.1 Production Release)*
+*Current release: [v1.0.4](https://github.com/Praduman0151/CastPro/releases/tag/v1.0.4)*
 
----
+## About CastPro
 
-## 🎮 Introduction
+CastPro is an offline screen and audio casting system for an Android phone and an Android TV / Google TV on the same local network. It is designed with mobile gaming in mind, but it can mirror any allowed phone screen content.
 
-Welcome to **Cast Pro**, an ultra-low latency (<35ms), 100% offline screen and audio mirroring suite engineered specifically for mobile gaming. 
+The phone captures the display with `MediaProjection`, encodes video with `MediaCodec` (H.264 by default) and sends a binary packet stream over TCP to the TV. The TV decodes the stream and renders it full-window with a selectable `TextureView` transform. No cloud relay, account or internet connection is used.
 
-Traditional casting solutions (such as standard Google Cast, Miracast, or AirPlay) introduce 150ms–500ms of buffer latency and require internet connectivity. Cast Pro bypasses all cloud relays, streaming raw H.264/HEVC hardware video frames and uncompressed 48kHz stereo PCM audio peer-to-peer over your local wireless network using zero-buffer `TCP_NODELAY` sockets.
+Latency depends on the phone, TV, encoder, decoder, Wi-Fi path and selected quality. CastPro does not guarantee a fixed millisecond latency or HDMI-equivalent behaviour.
 
----
+## 1. Install the two apps
 
-## 📦 1. Installation
+| App | Target device | Download |
+| --- | --- | --- |
+| CastPro Phone | Android 8.0+ phone | [`CastPro-Phone-debug.apk`](https://github.com/Praduman0151/CastPro/releases/download/v1.0.4/CastPro-Phone-debug.apk) |
+| CastPro TV | Android TV / Google TV, API 26+ | [`CastPro-TV-debug.apk`](https://github.com/Praduman0151/CastPro/releases/download/v1.0.4/CastPro-TV-debug.apk) |
 
-Cast Pro comprises two separate applications:
+Install the phone APK normally after allowing installation from your file manager.
 
-| Application | Target Device | APK File Location |
-|---|---|---|
-| **Cast Pro Sender** | Android Phone / Tablet (Android 8.0+) | [`app-phone-debug.apk`](file:///data/user/0/ai.antigem/files/home/projects/CastPro/build-artifacts/CastPro-Phone-debug/app-phone-debug.apk) |
-| **Cast Pro Receiver** | Android TV / Google TV / Fire TV | [`app-tv-debug.apk`](file:///data/user/0/ai.antigem/files/home/projects/CastPro/build-artifacts/CastPro-TV-debug/app-tv-debug.apk) |
+Sideload the TV APK using a TV file manager, "Send Files to TV", a USB drive or development ADB. ADB is only an installation/debug method; it is never the casting transport.
 
-### Installing on Android Phone:
-1. Transfer or download `app-phone-debug.apk` onto your phone.
-2. Tap the APK file in your file manager and select **Install** (allow "Install Unknown Apps" if prompted).
+## 2. Network setup
 
-### Installing on Android TV / Google TV:
-1. Sideload `app-tv-debug.apk` onto your TV using any of the following methods:
-   - **Send Files to TV (SFTV)** app from the Play Store.
-   - **ADB over Wi-Fi**: `adb connect <tv-ip>:5555 && adb install -r app-tv-debug.apk`.
-   - **USB Flash Drive**: Copy the APK to a USB drive and install via a TV file explorer (e.g., FX File Explorer).
+Both devices must reach each other on the same local network.
 
----
+### Option A: Same Wi-Fi router
 
-## 📶 2. Offline Network Setup (No Internet Required!)
+1. Connect the phone and TV to the same router.
+2. Prefer 5 GHz for the phone and Ethernet for the TV where possible.
+3. Keep the devices close enough for a stable link.
 
-Cast Pro operates entirely within your local wireless network. Internet access is **never** required. Choose one of the following network configurations:
+### Option B: Phone hotspot
 
-### Option A: Standard Wi-Fi Router (Recommended for 5GHz)
-- Connect both your Android Phone and your Android TV to the same Wi-Fi router.
-- *Pro Tip*: For competitive gaming, connect your TV via an Ethernet cable to the router and connect your phone to the **5GHz Wi-Fi band**.
+1. Enable the phone's portable Wi-Fi hotspot.
+2. Connect the TV to that hotspot.
+3. Open the CastPro TV receiver on the TV and note its IP address.
 
-### Option B: Mobile Hotspot (Field / Zero-Router Setup)
-1. On your Android Phone, turn on **Portable Wi-Fi Hotspot** (mobile data can remain turned off).
-2. On your Android TV, open Network Settings and connect to your phone's hotspot.
-3. Both devices will now be on the same ultra-fast direct wireless link!
+No internet connection is required for the casting path itself.
 
----
+## 3. Start a session
 
-## 🚀 3. Step-by-Step Usage Guide
+1. Open **CastPro TV** on the TV. It shows the TV's local IP address and listening port (default `8998`).
+2. Open **CastPro** on the phone. The app scans using NSD/mDNS and a UDP discovery fallback; you can also enter the TV IP/port manually or use QR pairing.
+3. Choose your quality profile or manual settings.
+4. Tap **Start** and approve the Android screen-capture prompt.
+5. The TV switches to full-screen video when real decoded frames arrive, not merely when the TCP socket connects.
 
-### Step 1: Launch the Receiver on Android TV
-1. Open **Cast Pro TV** from your TV apps or Leanback launcher.
-2. You will be greeted by the **Gamer Standby Dashboard**:
-   - The screen shows the TV's **Local IP Address** (e.g., `192.168.1.50`) and listening port (`9999`).
-   - The status indicator will display `LISTENING FOR SENDER...`.
-   - The mDNS discovery beacon will automatically advertise `_castpro._tcp` to local devices.
+## 4. Display modes
 
-### Step 2: Open Cast Pro on your Android Phone
-1. Launch **Cast Pro** on your phone.
-2. The dashboard will automatically scan for active TV receivers via local mDNS discovery.
-3. Your TV will appear under **Discovered Displays** with its device name and IP address.
-   *(Alternatively, you can manually enter the TV's IP address displayed on your TV screen).*
+Open **Cast settings** on the TV with the remote **OK**, **A** or **Menu** key, then choose **Display Mode**.
 
-### Step 3: Configure Gamer Settings (Optional)
-Tap the **Gamer Mode Card** on your phone dashboard to customize streaming fidelity:
-- **Gamer Mode**: Toggle **ON** (Forces zero-jitter buffering for instant touch-to-screen response).
-- **Target Frame Rate**: Choose **60 FPS** or **120 FPS** (for high refresh rate gaming).
-- **Video Bitrate**: Choose **15 Mbps** (ideal for standard 5GHz Wi-Fi) or **25 Mbps** (crystal clear high-detail fidelity).
+- **Stretch** — default. Uses independent X and Y scaling so the decoded frame fills 100% of the TV panel with no black bars and no crop. Aspect-ratio distortion is expected.
+- **Fit** — shows the whole frame and keeps black bars where needed.
+- **Fill** — fills the panel while preserving aspect ratio, cropping excess edges.
 
-### Step 4: Start Casting
-1. Tap on your TV receiver in the list (or tap **Start Direct Stream**).
-2. Android will present the system **Screen Recording / Projection Permission Dialog**:
-   - Select **Start Now** (or "Entire Screen").
-3. The notification bar will show `Cast Pro: Streaming Active`.
-4. Your TV screen will instantly switch to low-latency fullscreen rendering!
+The mode changes the TV-side transform. It does not change the phone's capture resolution.
 
----
+## 5. HUD and remote keys
 
-## 📊 4. Real-Time Gamer HUD Overlay
+The TV HUD shows real decoded resolution, codec, measured FPS, measured bitrate, target bitrate and latency indicators. Values appear from telemetry; unavailable values should not be treated as measured.
 
-During an active session, Cast Pro TV provides a real-time diagnostic heads-up display:
-- **LATENCY**: Real-time glass-to-glass network and render latency in milliseconds (typically 18ms–32ms on 5GHz).
-- **FPS**: Instantaneous decoder frame rate (locked 60 FPS or 120 FPS).
-- **BITRATE**: Active bandwidth throughput.
-- **DROPPED FRAMES**: Count of late frames discarded to maintain zero-latency sync.
+- **OK / A / Menu** — open or close Cast settings while casting.
+- **Info** — show or hide the HUD overlay.
+- **Mini HUD / Full HUD** — switch between compact and detailed HUD layouts.
 
-> *HUD Toggle*: Press the **Center / OK** button on your Android TV remote to toggle the HUD overlay on or off during gameplay.
+## 6. Audio
 
----
+- **Internal game/media audio** uses Android 10+ `AudioPlaybackCapture` and is sent as 48 kHz stereo PCM when the app and OS allow capture.
+- **Microphone** and **Muted** modes are also available.
+- Some apps or system versions block playback capture. If audio is missing, check the app's audio permissions and try another audio mode.
 
-## 🔊 5. In-Game Audio Routing
+## 7. Quality and live changes
 
-- **Internal Game Sound**: On Android 10 and newer, Cast Pro captures high-fidelity digital audio directly from the game via Android's `AudioPlaybackCaptureConfiguration`.
-- **Latency-Free Output**: Sound is packetized into uncompressed 48kHz 16-bit stereo PCM packets and played through the TV's low-latency `AudioTrack`.
-- *Note*: Games that explicitly set `USAGE_GAME` or allow playback capture stream audio with zero degradation.
+Presets cover 720p, 1080p, 1440p, 30/60/120 FPS and multiple bitrate targets, plus Battery Saver, Balanced, Low Latency and Max Quality profiles.
 
----
+Actual support depends on the phone encoder and TV decoder. The tested TCL TV supports H.264 only; HEVC may fail and should be reported in the HUD rather than silently claimed. 1440p and 120 FPS are not guaranteed on this hardware.
 
-## 🛑 6. Ending the Session
+Live quality changes reuse the existing screen-capture permission, swap the encoder input surface and resize the virtual display. This was introduced to stop the TV picture from jumping sideways when quality changed.
 
-- **From Phone**: Open the notification shade and tap **Stop Cast**, or open the Cast Pro app and tap the red **Disconnect** button.
-- **From TV**: Simply press the **Back** or **Home** button on your TV remote to return to the Standby screen or exit the application.
+## 8. Ending and reconnecting
 
----
+- Stop from the phone app notification or dashboard.
+- If the TV link drops, the phone retries the TCP connection and requests a fresh keyframe when it reconnects.
+- Receiver status distinguishes a connected client from an actively streaming video session.
 
-## 💡 7. Pro Tips for Competitive Low-Latency Gaming
+## 9. Current verification status
 
-1. **Use 5GHz or Wi-Fi 6**: Avoid 2.4GHz Wi-Fi where possible, as microwave interference and channel crowding can cause packet jitter.
-2. **Enable "Game Mode" on your TV**: Switch your TV's picture preset to **Game Mode**. This disables the TV's internal post-processing image filters, shaving off an extra 20ms–50ms of display lag!
-3. **Keep Phone Screen On**: In-game touch controls work directly on your phone display while your friends or audience watch on the big screen without delay.
+- CI compiles both phone and TV APKs for v1.0.4.
+- Earlier Phase 1 testing recorded 20 consecutive quality changes without root-layout or surface-bound movement.
+- Full-screen Stretch verification with PUBG Mobile on the OnePlus Nord 5 and TCL Android TV is still pending.
+- UDP transport and USB-assisted casting are experimental documents/prototypes, not active production features.
+
+See [QA_REPORT.md](QA_REPORT.md) for test evidence and known limitations.
