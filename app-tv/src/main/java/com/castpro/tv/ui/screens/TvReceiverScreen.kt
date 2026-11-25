@@ -328,6 +328,11 @@ private fun TvCastSettingsPanel(
     modifier: Modifier = Modifier
 ) {
     val firstControlFocus = remember { FocusRequester() }
+    val settingsAspect = if (state.streamConfig.height > 0) {
+        state.streamConfig.width.toFloat() / state.streamConfig.height
+    } else {
+        16f / 9f
+    }
     LaunchedEffect(Unit) {
         runCatching { firstControlFocus.requestFocus() }
     }
@@ -418,7 +423,7 @@ private fun TvCastSettingsPanel(
             fontSize = 13.sp
         )
         Text(
-            text = "Stream shape ${String.format("%.2f", streamAspect)}:1 · " +
+            text = "Stream shape ${String.format("%.2f", settingsAspect)}:1 · " +
                 "Full crops the edges, Fit keeps black bars, Stretch forces 16:9.",
             color = Color.Gray,
             fontSize = 11.sp
