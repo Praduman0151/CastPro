@@ -50,6 +50,7 @@ class TvMainActivity : ComponentActivity() {
                 onCycleDisplayMode = { viewModel.cycleDisplayMode() },
                 onCycleColorFilter = { viewModel.cycleColorFilter() },
                 onToggleSettings = { viewModel.toggleSettingsPanel() },
+                onToggleCompactHud = { viewModel.toggleCompactHud() },
                 onResetServer = { viewModel.resetServer() },
                 onSurfaceCreated = { surfaceView ->
                     val renderer = TvSurfaceRenderer(
@@ -112,13 +113,23 @@ class TvMainActivity : ComponentActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_BUTTON_A) {
-            if (viewModel.uiState.value.showSettingsPanel) {
-                viewModel.toggleSettingsPanel()
-            } else {
-                viewModel.toggleHudOverlay()
+        // The remote's OK button must always reach Cast settings while casting.
+        // HUD visibility has its own key so OK is never swallowed by a toggle.
+        when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_BUTTON_A,
+            KeyEvent.KEYCODE_MENU -> {
+                if (viewModel.uiState.value.showSettingsPanel) {
+                    viewModel.toggleSettingsPanel()
+                } else {
+                    viewModel.openSettingsPanel()
+                }
+                return true
             }
-            return true
+            KeyEvent.KEYCODE_INFO -> {
+                viewModel.toggleHudOverlay()
+                return true
+            }
         }
         return super.onKeyDown(keyCode, event)
     }

@@ -261,16 +261,52 @@ class PhoneStreamViewModel(application: Application) : AndroidViewModel(applicat
             "${settings.framerate.fps} fps · ${settings.codec.name} · " +
             "${String.format("%.1f", settings.bitrate.bps / 1_000_000f)} Mb/s"
 
+    fun applyOptimizationProfile(profile: OptimizationProfile) {
+        val current = _uiState.value.settings
+        val tuned = when (profile) {
+            OptimizationProfile.CUSTOM -> current.copy(profile = OptimizationProfile.CUSTOM)
+            OptimizationProfile.BATTERY -> current.copy(
+                profile = profile,
+                resolution = Resolution.HD_720P,
+                framerate = Framerate.FPS_30,
+                bitrate = BitratePreset.BALANCED_8M,
+                isGamingMode = false
+            )
+            OptimizationProfile.BALANCED -> current.copy(
+                profile = profile,
+                resolution = Resolution.FHD_1080P,
+                framerate = Framerate.FPS_60,
+                bitrate = BitratePreset.GAMING_15M,
+                isGamingMode = true
+            )
+            OptimizationProfile.LOW_LATENCY -> current.copy(
+                profile = profile,
+                resolution = Resolution.HD_720P,
+                framerate = Framerate.FPS_60,
+                bitrate = BitratePreset.BALANCED_8M,
+                isGamingMode = true
+            )
+            OptimizationProfile.QUALITY -> current.copy(
+                profile = profile,
+                resolution = Resolution.QHD_1440P,
+                framerate = Framerate.FPS_60,
+                bitrate = BitratePreset.ULTRA_25M,
+                isGamingMode = true
+            )
+        }
+        updateSettings(tuned)
+    }
+
     fun toggleGamingMode(enabled: Boolean) {
-        updateSettings(_uiState.value.settings.copy(isGamingMode = enabled))
+        updateSettings(_uiState.value.settings.copy(profile = OptimizationProfile.CUSTOM, isGamingMode = enabled))
     }
 
     fun toggleWebServer(enabled: Boolean) {
-        updateSettings(_uiState.value.settings.copy(enableWebServer = enabled))
+        updateSettings(_uiState.value.settings.copy(profile = OptimizationProfile.CUSTOM, enableWebServer = enabled))
     }
 
     fun toggleAutoConnect(enabled: Boolean) {
-        updateSettings(_uiState.value.settings.copy(autoConnect = enabled))
+        updateSettings(_uiState.value.settings.copy(profile = OptimizationProfile.CUSTOM, autoConnect = enabled))
     }
 
     fun selectReceiver(receiver: DiscoveredReceiver) {

@@ -190,7 +190,12 @@ class HardwareVideoDecoder(
                 // Queue them even while waiting, but keep waiting for a real IDR.
                 if (waitingForKeyframe && !isCodecConfig && !keyFrame) return
 
-                val inputIndex = codec.dequeueInputBuffer(if (keyFrame) 30_000 else 5_000)
+                // Never block the network thread waiting for an input buffer.
+                // A late frame is worthless in a low-latency cast; dropping it
+                // keeps motion real-time instead of turning the cast into slow
+                // motion. Keyframes still get a short wait because they unlock
+                // everything that follows.
+                val inputIndex = codec.dequeueInputBuffer(if (keyFrame) 10_000 else 0)
                 if (inputIndex < 0) return
 
                 val inputBuffer = codec.getInputBuffer(inputIndex) ?: return
@@ -200,7 +205,12 @@ class HardwareVideoDecoder(
                 // Parameter sets must be flagged as codec config or decoders
                 // on many TVs reject the following IDR.
                 val codecFlags = if (isCodecConfig) MediaCodec.BUFFER_FLAG_CODEC_CONFIG else 0
-                codec.queueInputBuffer(inputIndex, 0, bytesToQueue, timestampNano / 1_000, codecFlags)
+                // MediaCodec presentation times must come from a monotonic
+                // clock. The phone's wall-clock stamp is only for latency
+                // reporting; feeding it here makes SurfaceFlinger delay frames
+                // and the picture appears to run in slow motion.
+                val presentationTimeUs = System.nanoTime() / 1_000L
+                codec.queueInputBuffer(inputIndex, 0, bytesToQueue, presentationTimeUs, codecFlags)
                 if (!isCodecConfig && keyFrame) waitingForKeyframe = false
                 bytesInWindow += bytesToQueue
 

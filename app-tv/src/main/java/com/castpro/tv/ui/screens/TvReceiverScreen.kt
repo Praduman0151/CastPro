@@ -15,6 +15,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -22,6 +23,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -49,6 +52,7 @@ fun TvReceiverScreen(
     onCycleDisplayMode: () -> Unit = {},
     onCycleColorFilter: () -> Unit = {},
     onToggleSettings: () -> Unit = {},
+    onToggleCompactHud: () -> Unit = {},
     onResetServer: () -> Unit = {}
 ) {
     val tvAspect = 16f / 9f
@@ -60,8 +64,8 @@ fun TvReceiverScreen(
     // Zoom use the whole window. Never derive this from phone sensor geometry.
     val surfaceModifier = when (state.displayMode) {
         TvDisplayMode.FIT -> Modifier
-            .fillMaxSize()
             .aspectRatio(streamAspect)
+            .fillMaxSize()
         TvDisplayMode.FULL -> Modifier.fillMaxSize()
         TvDisplayMode.STRETCH -> {
             val scaleX = if (streamAspect < tvAspect) tvAspect / streamAspect else 1f
@@ -284,6 +288,8 @@ fun TvReceiverScreen(
                     onCycleDisplayMode = onCycleDisplayMode,
                     onCycleColorFilter = onCycleColorFilter,
                     onToggleSettings = onToggleSettings,
+                    onToggleCompactHud = onToggleCompactHud,
+                    compact = state.compactHud,
                     settingsVisible = state.showSettingsPanel,
                     error = state.connectionError,
                     modifier = Modifier
@@ -296,6 +302,7 @@ fun TvReceiverScreen(
                     state = state,
                     onDisplayModeChanged = onDisplayModeChanged,
                     onColorFilterChanged = onColorFilterChanged,
+                    onToggleCompactHud = onToggleCompactHud,
                     onResetServer = onResetServer,
                     onClose = onToggleSettings,
                     modifier = Modifier.align(Alignment.Center)
@@ -310,10 +317,15 @@ private fun TvCastSettingsPanel(
     state: TvUiState,
     onDisplayModeChanged: (TvDisplayMode) -> Unit,
     onColorFilterChanged: (TvColorFilter) -> Unit,
+    onToggleCompactHud: () -> Unit,
     onResetServer: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val firstControlFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        runCatching { firstControlFocus.requestFocus() }
+    }
     Column(
         modifier = modifier
             .background(Color(0xE60B1018), RoundedCornerShape(18.dp))
@@ -348,11 +360,12 @@ private fun TvCastSettingsPanel(
             fontSize = 13.sp
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TvDisplayMode.values().forEach { mode ->
+            TvDisplayMode.values().forEachIndexed { index, mode ->
                 TvChip(
                     label = mode.label,
                     selected = state.displayMode == mode,
-                    onClick = { onDisplayModeChanged(mode) }
+                    onClick = { onDisplayModeChanged(mode) },
+                    modifier = if (index == 0) Modifier.focusRequester(firstControlFocus) else Modifier
                 )
             }
         }
@@ -405,6 +418,20 @@ private fun TvCastSettingsPanel(
             color = Color.Gray,
             fontSize = 11.sp
         )
+        Text(text = "HUD MODE", color = TvNeonBlue, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TvChip(
+                label = "Mini HUD",
+                selected = state.compactHud,
+                onClick = onToggleCompactHud
+            )
+            TvChip(
+                label = "Full HUD",
+                selected = !state.compactHud,
+                onClick = onToggleCompactHud
+            )
+        }
+
         TvResetButton(
             onClick = onResetServer,
             modifier = Modifier.padding(top = 4.dp)
@@ -416,7 +443,8 @@ private fun TvCastSettingsPanel(
 private fun TvChip(
     label: String,
     selected: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(8.dp)
@@ -426,7 +454,7 @@ private fun TvChip(
         else -> Color(0xFF30363D)
     }
     Box(
-        modifier = Modifier
+        modifier = modifier
             .onFocusChanged { focused = it.isFocused }
             .then(
                 if (selected) Modifier.shadow(

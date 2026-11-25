@@ -24,9 +24,13 @@ import com.castpro.phone.ui.theme.*
 @Composable
 fun PhoneSettingsScreen(
     settings: StreamingSettings,
-    onSettingsChanged: (StreamingSettings) -> Unit
+    onSettingsChanged: (StreamingSettings) -> Unit,
+    onApplyOptimizationProfile: (OptimizationProfile) -> Unit
 ) {
     val scrollState = rememberScrollState()
+    val changeManually: (StreamingSettings) -> Unit = {
+        onSettingsChanged(it.copy(profile = OptimizationProfile.CUSTOM))
+    }
 
     Column(
         modifier = Modifier
@@ -43,6 +47,37 @@ fun PhoneSettingsScreen(
             fontWeight = FontWeight.Bold
         )
 
+        // 0. One-tap optimization profiles
+        SettingsSectionCard(title = "Optimization Profile", icon = Icons.Default.AutoAwesome) {
+            Text(
+                text = "Pick a goal; manual tweaks below switch back to Custom.",
+                color = GamerTextSecondary,
+                fontSize = 11.sp
+            )
+            OptimizationProfile.values().forEach { profile ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onApplyOptimizationProfile(profile) }
+                        .padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(
+                        selected = settings.profile == profile,
+                        onClick = { onApplyOptimizationProfile(profile) },
+                        colors = RadioButtonDefaults.colors(
+                            selectedColor = GamerNeonGreen,
+                            unselectedColor = GamerTextSecondary
+                        )
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(profile.displayName, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Text(profile.description, color = GamerTextSecondary, fontSize = 10.sp)
+                    }
+                }
+            }
+        }
+
         // 1. Resolution
         SettingsSectionCard(title = "Target Resolution", icon = Icons.Default.Tv) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -51,7 +86,7 @@ fun PhoneSettingsScreen(
                         label = res.displayName,
                         isSelected = settings.resolution == res,
                         modifier = Modifier.weight(1f),
-                        onClick = { onSettingsChanged(settings.copy(resolution = res)) }
+                        onClick = { changeManually(settings.copy(resolution = res)) }
                     )
                 }
             }
@@ -65,7 +100,7 @@ fun PhoneSettingsScreen(
                         label = "${fps.fps} FPS",
                         isSelected = settings.framerate == fps,
                         modifier = Modifier.weight(1f),
-                        onClick = { onSettingsChanged(settings.copy(framerate = fps)) }
+                        onClick = { changeManually(settings.copy(framerate = fps)) }
                     )
                 }
             }
@@ -79,13 +114,13 @@ fun PhoneSettingsScreen(
                         label = BitratePreset.BALANCED_8M.displayName,
                         isSelected = settings.bitrate == BitratePreset.BALANCED_8M,
                         modifier = Modifier.weight(1f),
-                        onClick = { onSettingsChanged(settings.copy(bitrate = BitratePreset.BALANCED_8M)) }
+                        onClick = { changeManually(settings.copy(bitrate = BitratePreset.BALANCED_8M)) }
                     )
                     OptionChip(
                         label = BitratePreset.GAMING_15M.displayName,
                         isSelected = settings.bitrate == BitratePreset.GAMING_15M,
                         modifier = Modifier.weight(1f),
-                        onClick = { onSettingsChanged(settings.copy(bitrate = BitratePreset.GAMING_15M)) }
+                        onClick = { changeManually(settings.copy(bitrate = BitratePreset.GAMING_15M)) }
                     )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -93,13 +128,13 @@ fun PhoneSettingsScreen(
                         label = BitratePreset.ULTRA_25M.displayName,
                         isSelected = settings.bitrate == BitratePreset.ULTRA_25M,
                         modifier = Modifier.weight(1f),
-                        onClick = { onSettingsChanged(settings.copy(bitrate = BitratePreset.ULTRA_25M)) }
+                        onClick = { changeManually(settings.copy(bitrate = BitratePreset.ULTRA_25M)) }
                     )
                     OptionChip(
                         label = BitratePreset.EXTREME_40M.displayName,
                         isSelected = settings.bitrate == BitratePreset.EXTREME_40M,
                         modifier = Modifier.weight(1f),
-                        onClick = { onSettingsChanged(settings.copy(bitrate = BitratePreset.EXTREME_40M)) }
+                        onClick = { changeManually(settings.copy(bitrate = BitratePreset.EXTREME_40M)) }
                     )
                 }
             }
@@ -113,7 +148,7 @@ fun PhoneSettingsScreen(
                         label = codec.name,
                         isSelected = settings.codec == codec,
                         modifier = Modifier.weight(1f),
-                        onClick = { onSettingsChanged(settings.copy(codec = codec)) }
+                        onClick = { changeManually(settings.copy(codec = codec)) }
                     )
                 }
             }
@@ -126,13 +161,13 @@ fun PhoneSettingsScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onSettingsChanged(settings.copy(audioMode = mode)) }
+                            .clickable { changeManually(settings.copy(audioMode = mode)) }
                             .padding(vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         RadioButton(
                             selected = settings.audioMode == mode,
-                            onClick = { onSettingsChanged(settings.copy(audioMode = mode)) },
+                            onClick = { changeManually(settings.copy(audioMode = mode)) },
                             colors = RadioButtonDefaults.colors(
                                 selectedColor = GamerNeonGreen,
                                 unselectedColor = GamerTextSecondary
@@ -162,28 +197,28 @@ fun PhoneSettingsScreen(
                     title = "Automatic TV Connection",
                     subtitle = "Select the first TV found and reconnect automatically after a drop",
                     checked = settings.autoConnect,
-                    onCheckedChange = { onSettingsChanged(settings.copy(autoConnect = it)) }
+                    onCheckedChange = { changeManually(settings.copy(autoConnect = it)) }
                 )
                 HorizontalDivider(color = GamerCardBorder.copy(alpha = 0.5f))
                 SettingSwitchRow(
                     title = "In-Game Floating Overlay HUD",
                     subtitle = "Shows live FPS & latency pill with quick pause/stop controls",
                     checked = settings.enableFloatingOverlay,
-                    onCheckedChange = { onSettingsChanged(settings.copy(enableFloatingOverlay = it)) }
+                    onCheckedChange = { changeManually(settings.copy(enableFloatingOverlay = it)) }
                 )
                 HorizontalDivider(color = GamerCardBorder.copy(alpha = 0.5f))
                 SettingSwitchRow(
                     title = "Keep Screen Awake (WakeLock)",
                     subtitle = "Prevents screen dimming or sleep during intense gaming",
                     checked = settings.enableKeepAwake,
-                    onCheckedChange = { onSettingsChanged(settings.copy(enableKeepAwake = it)) }
+                    onCheckedChange = { changeManually(settings.copy(enableKeepAwake = it)) }
                 )
                 HorizontalDivider(color = GamerCardBorder.copy(alpha = 0.5f))
                 SettingSwitchRow(
                     title = "Universal Web Browser Casting",
                     subtitle = "Host stream on http://<ip>:8080 for PC, Mac, iPhone & Smart TVs",
                     checked = settings.enableWebServer,
-                    onCheckedChange = { onSettingsChanged(settings.copy(enableWebServer = it)) }
+                    onCheckedChange = { changeManually(settings.copy(enableWebServer = it)) }
                 )
             }
         }

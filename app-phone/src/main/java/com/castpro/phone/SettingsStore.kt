@@ -4,6 +4,7 @@ import android.content.Context
 import com.castpro.core.common.model.AudioMode
 import com.castpro.core.common.model.BitratePreset
 import com.castpro.core.common.model.Framerate
+import com.castpro.core.common.model.OptimizationProfile
 import com.castpro.core.common.model.PairingInfo
 import com.castpro.core.common.model.Resolution
 import com.castpro.core.common.model.StreamingSettings
@@ -16,6 +17,7 @@ class SettingsStore(context: Context) {
 
     fun load(): StreamingSettings {
         return StreamingSettings(
+            profile = enumOf(prefs.getString(KEY_PROFILE, null), OptimizationProfile.CUSTOM),
             resolution = enumOf(prefs.getString(KEY_RESOLUTION, null), Resolution.FHD_1080P),
             framerate = enumOf(prefs.getString(KEY_FRAMERATE, null), Framerate.FPS_60),
             bitrate = enumOf(prefs.getString(KEY_BITRATE, null), BitratePreset.GAMING_15M),
@@ -32,6 +34,7 @@ class SettingsStore(context: Context) {
 
     fun save(settings: StreamingSettings) {
         prefs.edit()
+            .putString(KEY_PROFILE, settings.profile.name)
             .putString(KEY_RESOLUTION, settings.resolution.name)
             .putString(KEY_FRAMERATE, settings.framerate.name)
             .putString(KEY_BITRATE, settings.bitrate.name)
@@ -81,6 +84,7 @@ class SettingsStore(context: Context) {
     }
 
     private companion object {
+        const val KEY_PROFILE = "optimization_profile"
         const val KEY_RESOLUTION = "resolution"
         const val KEY_FRAMERATE = "framerate"
         const val KEY_BITRATE = "bitrate"

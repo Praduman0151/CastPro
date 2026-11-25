@@ -41,7 +41,22 @@ enum class AudioMode(val displayName: String) {
     MUTED("Muted")
 }
 
+/**
+ * One-tap streaming profiles. CUSTOM keeps whatever the user tuned manually.
+ */
+enum class OptimizationProfile(
+    val displayName: String,
+    val description: String
+) {
+    CUSTOM("Custom", "Your manual settings"),
+    BATTERY("Battery Saver", "720p · 30 FPS · 8 Mb/s · cooler phone"),
+    BALANCED("Balanced", "1080p · 60 FPS · 15 Mb/s · best all-round"),
+    LOW_LATENCY("Low Latency", "720p · 60 FPS · 8 Mb/s · fastest motion"),
+    QUALITY("Max Quality", "1440p · 60 FPS · 25 Mb/s · sharpest image")
+}
+
 data class StreamingSettings(
+    val profile: OptimizationProfile = OptimizationProfile.CUSTOM,
     val resolution: Resolution = Resolution.FHD_1080P,
     val framerate: Framerate = Framerate.FPS_60,
     val bitrate: BitratePreset = BitratePreset.GAMING_15M,

@@ -222,7 +222,8 @@ class MainActivity : ComponentActivity() {
                             )
                             2 -> PhoneSettingsScreen(
                                 settings = state.settings,
-                                onSettingsChanged = { viewModel.updateSettings(it) }
+                                onSettingsChanged = { viewModel.updateSettings(it) },
+                                onApplyOptimizationProfile = { viewModel.applyOptimizationProfile(it) }
                             )
                             3 -> PhoneSessionStatsScreen(
                                 stats = state.sessionStats,

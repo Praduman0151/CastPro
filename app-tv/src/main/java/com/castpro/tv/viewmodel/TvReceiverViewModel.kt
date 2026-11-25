@@ -40,6 +40,7 @@ data class TvUiState(
     val metrics: LatencyMetrics = LatencyMetrics(),
     val showHudOverlay: Boolean = true,
     val showSettingsPanel: Boolean = false,
+    val compactHud: Boolean = false,
     val displayMode: TvDisplayMode = TvDisplayMode.FULL,
     val colorFilter: TvColorFilter = TvColorFilter.STANDARD,
     val connectionError: String? = null,
@@ -101,6 +102,7 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
                         prefs.getString(KEY_COLOR_FILTER, TvColorFilter.STANDARD.name) ?: TvColorFilter.STANDARD.name
                     )
                 }.getOrDefault(TvColorFilter.STANDARD),
+                compactHud = prefs.getBoolean(KEY_COMPACT_HUD, false),
                 lastCrash = com.castpro.tv.tvCrashLogFile(app)
                     .takeIf { file -> file.exists() }
                     ?.readText()
@@ -310,8 +312,18 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
         _uiState.update { it.copy(showHudOverlay = !it.showHudOverlay) }
     }
 
+    fun toggleCompactHud() {
+        val next = !_uiState.value.compactHud
+        prefs.edit().putBoolean(KEY_COMPACT_HUD, next).apply()
+        _uiState.update { it.copy(compactHud = next) }
+    }
+
     fun toggleSettingsPanel() {
         _uiState.update { it.copy(showSettingsPanel = !it.showSettingsPanel) }
+    }
+
+    fun openSettingsPanel() {
+        _uiState.update { it.copy(showSettingsPanel = true, showHudOverlay = true) }
     }
 
     fun setDisplayMode(mode: TvDisplayMode) {
@@ -354,5 +366,6 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
         private const val ASSUMED_ONE_WAY_NS = 2_000_000L
         private const val KEY_DISPLAY_MODE = "display_mode"
         private const val KEY_COLOR_FILTER = "color_filter"
+        private const val KEY_COMPACT_HUD = "compact_hud"
     }
 }
