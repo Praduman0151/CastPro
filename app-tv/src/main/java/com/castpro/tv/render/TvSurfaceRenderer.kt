@@ -38,7 +38,13 @@ class TvSurfaceRenderer(
         ).apply { start() }
     }
 
-    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        // A Compose/FIT size change recreates the surface buffer. Reapply the
+        // active crop mode so the decoder does not keep a stale crop rect.
+        if (width > 0 && height > 0) {
+            decoder?.setVideoScalingMode(scalingMode)
+        }
+    }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         isSurfaceReady = false

@@ -2,6 +2,7 @@ package com.castpro.tv
 
 import android.os.Bundle
 import android.view.KeyEvent
+import android.view.ViewTreeObserver
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -23,6 +24,7 @@ class TvMainActivity : ComponentActivity() {
     private var surfaceRenderer: TvSurfaceRenderer? = null
     private var audioPlayer: TvAudioPlayer? = null
     private var serverStarted = false
+    private var rootLayoutListener: ViewTreeObserver.OnGlobalLayoutListener? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -31,6 +33,19 @@ class TvMainActivity : ComponentActivity() {
         // Draw behind system bars so the video really reaches the panel edges.
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).hide(WindowInsetsCompat.Type.systemBars())
+
+        // Real root-layout instrumentation: these bounds are logged whenever the
+        // window changes, so a quality change cannot silently shift the picture.
+        val decorView = window.decorView
+        val layoutListener = ViewTreeObserver.OnGlobalLayoutListener {
+            android.util.Log.i(
+                "TvLayout",
+                "Root bounds=${decorView.width}x${decorView.height} " +
+                    "x=${decorView.x} y=${decorView.y} rotation=${decorView.rotation}"
+            )
+        }
+        decorView.viewTreeObserver.addOnGlobalLayoutListener(layoutListener)
+        rootLayoutListener = layoutListener
 
         val player = TvAudioPlayer().apply { start() }
         audioPlayer = player
@@ -53,6 +68,15 @@ class TvMainActivity : ComponentActivity() {
                 onToggleCompactHud = { viewModel.toggleCompactHud() },
                 onResetServer = { viewModel.resetServer() },
                 onSurfaceCreated = { surfaceView ->
+                    surfaceView.addOnLayoutChangeListener { view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+                        if (left != oldLeft || top != oldTop || right != oldRight || bottom != oldBottom) {
+                            android.util.Log.i(
+                                "TvLayout",
+                                "SurfaceView bounds=${right - left}x${bottom - top} " +
+                                    "l=$left t=$top r=$right b=$bottom"
+                            )
+                        }
+                    }
                     val renderer = TvSurfaceRenderer(
                         surfaceView = surfaceView,
                         initialConfig = viewModel.uiState.value.streamConfig,
@@ -85,6 +109,9 @@ class TvMainActivity : ComponentActivity() {
                                 surfaceRenderer?.onConfig(config)
                             },
                             onFrameReceived = { data, offset, length, timestampNano, isGamingMode, isCodecConfig, isKeyframe ->
+                                if (!isCodecConfig) {
+                                    viewModel.markVideoReceived()
+                                }
                                 surfaceRenderer?.onFrame(
                                     data,
                                     offset,
@@ -99,10 +126,9 @@ class TvMainActivity : ComponentActivity() {
                                 player.playAudioChunk(data, offset, length)
                             },
                             onGeometryReceived = { geometry ->
-                                // Rotation metadata only. The real phone aspect
-                                // is used by Stretch mode; the decoder surface
-                                // itself is never resized from sensor data.
-                                viewModel.updateAspectRatio(geometry.aspectRatio)
+                                // Rotation metadata only. Phone sensor geometry
+                                // must never resize the video surface: doing so
+                                // made the whole cast jump when quality changed.
                                 surfaceRenderer?.onGeometry(geometry)
                             }
                         )
@@ -135,6 +161,8 @@ class TvMainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        rootLayoutListener?.let { window.decorView.viewTreeObserver.removeOnGlobalLayoutListener(it) }
+        rootLayoutListener = null
         super.onDestroy()
         surfaceRenderer?.release()
         audioPlayer?.stop()

@@ -72,6 +72,12 @@ class HardwareVideoDecoder(
             Log.i(tag, "Reconfiguring decoder: ${newConfig.codecMime} ${newConfig.width}x${newConfig.height}")
             stopCodec()
             config = newConfig
+            // Reset telemetry to the new configuration instead of showing the
+            // previous resolution until the next output-format callback.
+            decodedWidth = newConfig.width
+            decodedHeight = newConfig.height
+            decodedCodecLabel = codecDisplayName(newConfig.codecMime)
+            resetMetrics()
             startCodec()
         }
     }

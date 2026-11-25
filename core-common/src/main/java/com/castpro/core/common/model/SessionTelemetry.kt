@@ -32,6 +32,8 @@ data class SessionTelemetry(
     val bytesSent: Long = 0L,
     val droppedFrames: Long = 0L,
     val webClients: Int = 0,
+    /** Quality the encoder actually accepted, not the last saved setting. */
+    val appliedQualityLabel: String? = null,
     val error: String? = null,
     val startedAtMs: Long = 0L
 ) {
@@ -60,6 +62,7 @@ object CastSessionBus {
                 bitrateMbps = 0f,
                 connectionState = SessionConnectionState.IDLE,
                 connectionError = null,
+                appliedQualityLabel = null,
                 error = error
             )
         }
@@ -97,6 +100,10 @@ object CastSessionBus {
 
     fun setError(message: String?) {
         _state.update { it.copy(error = message) }
+    }
+
+    fun setAppliedQuality(label: String?) {
+        _state.update { it.copy(appliedQualityLabel = label) }
     }
 
     fun setWebClients(count: Int) {

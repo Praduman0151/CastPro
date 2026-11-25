@@ -38,6 +38,9 @@ data class TvUiState(
     val streamConfig: StreamConfig = StreamConfig(),
     val aspectRatio: Float = 16f / 9f,
     val metrics: LatencyMetrics = LatencyMetrics(),
+    /** TCP is connected, but video may not have arrived yet. */
+    val isClientConnected: Boolean = false,
+    val connectionStatus: String = "Starting receiver…",
     val showHudOverlay: Boolean = true,
     val showSettingsPanel: Boolean = false,
     val compactHud: Boolean = false,
@@ -204,7 +207,9 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
                 connectionError = null,
                 isServerRunning = false,
                 isStreaming = false,
-                clientIp = null
+                isClientConnected = false,
+                clientIp = null,
+                connectionStatus = "Restarting receiver…"
             )
         }
         createServer()
@@ -236,17 +241,34 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
                 retryJob?.cancel()
                 _uiState.update {
                     it.copy(
-                        isStreaming = true,
+                        isClientConnected = true,
+                        // Do not show the player until real video arrives. A TCP
+                        // accept alone used to mark the receiver "Streaming".
+                        isStreaming = false,
                         clientIp = ip,
-                        connectionError = null
+                        connectionError = null,
+                        connectionStatus = "Connected • waiting for video"
                     )
                 }
             },
             onClientDisconnected = {
-                _uiState.update { it.copy(isStreaming = false, clientIp = null) }
+                _uiState.update {
+                    it.copy(
+                        isStreaming = false,
+                        isClientConnected = false,
+                        clientIp = null,
+                        connectionStatus = if (it.isServerRunning) "Waiting for phone" else "Receiver offline"
+                    )
+                }
             },
             onError = { message ->
-                _uiState.update { it.copy(connectionError = message, isServerRunning = false) }
+                _uiState.update {
+                    it.copy(
+                        connectionError = message,
+                        connectionStatus = "Receiver error • retrying",
+                        isServerRunning = false
+                    )
+                }
                 // Always close the old listener before retrying, otherwise its
                 // bound port survives and every retry fails with EADDRINUSE.
                 socketServer?.stop()
@@ -260,7 +282,13 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
         )
         if (server.start()) {
             socketServer = server
-            _uiState.update { it.copy(isServerRunning = true, connectionError = null) }
+            _uiState.update {
+                it.copy(
+                    isServerRunning = true,
+                    connectionError = null,
+                    connectionStatus = if (it.isClientConnected) it.connectionStatus else "Listening for phone"
+                )
+            }
         } else {
             // start() already reported the error and scheduled a retry. Keep
             // the failed instance out of socketServer so the retry cannot stop
@@ -292,6 +320,26 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
         _uiState.update { it.copy(metrics = metrics) }
     }
 
+    /**
+     * Only real video packets mark the receiver as streaming. This keeps the
+     * TV status consistent with what the viewer actually sees, even if the
+     * phone reconnects its socket before the encoder is ready.
+     */
+    fun markVideoReceived() {
+        var changed = false
+        _uiState.update { state ->
+            if (state.isStreaming && state.connectionStatus == "Streaming") {
+                state
+            } else {
+                changed = true
+                state.copy(isStreaming = true, connectionStatus = "Streaming")
+            }
+        }
+        if (changed) {
+            android.util.Log.i("TvConnection", "Video packets arrived; receiver is streaming")
+        }
+    }
+
     fun dismissCrashReport() {
         com.castpro.tv.tvCrashLogFile(app).delete()
         _uiState.update { it.copy(lastCrash = null) }
@@ -300,12 +348,6 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
     /** Keeps decoder failures visible on the TV instead of only in logcat. */
     fun reportError(message: String) {
         _uiState.update { it.copy(connectionError = message) }
-    }
-
-    fun updateAspectRatio(ratio: Float) {
-        if (ratio > 0.1f && ratio < 10f) {
-            _uiState.update { it.copy(aspectRatio = ratio) }
-        }
     }
 
     fun toggleHudOverlay() {

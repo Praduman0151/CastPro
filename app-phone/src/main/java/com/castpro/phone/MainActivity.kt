@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.ViewTreeObserver
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -49,14 +50,22 @@ class MainActivity : ComponentActivity() {
     private val viewModel: PhoneStreamViewModel by viewModels()
     private var pendingProjectionStart = false
     private var audioPermissionDenied = false
+    private var rootLayoutListener: ViewTreeObserver.OnGlobalLayoutListener? = null
 
     private val projectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            startCaptureService(result.resultCode, result.data!!)
+            runCatching { startCaptureService(result.resultCode, result.data!!) }
+                .onFailure { error ->
+                    android.util.Log.e("CastProStart", "Could not start capture service", error)
+                    viewModel.setStatus(StreamStatus.ERROR)
+                    viewModel.setError(error.message ?: "Could not start screen capture")
+                }
         } else {
+            // A cancelled or revoked projection must not leave the UI in CONNECTING.
             viewModel.setStatus(StreamStatus.IDLE)
+            CastSessionBus.stop()
             Toast.makeText(this, "Screen capture permission is required to cast", Toast.LENGTH_SHORT).show()
         }
     }
@@ -114,6 +123,18 @@ class MainActivity : ComponentActivity() {
         ) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+
+        // Real layout measurement: quality changes must never move the root.
+        val decorView = window.decorView
+        val layoutListener = ViewTreeObserver.OnGlobalLayoutListener {
+            android.util.Log.i(
+                "PhoneLayout",
+                "Root bounds=${decorView.width}x${decorView.height} " +
+                    "x=${decorView.x} y=${decorView.y} rotation=${decorView.rotation}"
+            )
+        }
+        decorView.viewTreeObserver.addOnGlobalLayoutListener(layoutListener)
+        rootLayoutListener = layoutListener
 
         setContent {
             CastProTheme {
@@ -286,15 +307,21 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun launchProjectionPrompt() {
-        val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        // A caster mirrors the whole device. On Android 14+ the default dialog
-        // can capture a single app, which would show only Cast Pro on the TV.
-        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            manager.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay())
-        } else {
-            manager.createScreenCaptureIntent()
+        try {
+            val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            // A caster mirrors the whole device. On Android 14+ the default
+            // dialog can capture a single app, which would show only Cast Pro.
+            val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                manager.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay())
+            } else {
+                manager.createScreenCaptureIntent()
+            }
+            projectionLauncher.launch(intent)
+        } catch (error: Exception) {
+            android.util.Log.e("CastProStart", "Could not open projection consent", error)
+            viewModel.setStatus(StreamStatus.ERROR)
+            viewModel.setError(error.message ?: "Could not open screen capture consent")
         }
-        projectionLauncher.launch(intent)
     }
 
     private fun startCaptureService(resultCode: Int, resultData: Intent) {
@@ -332,14 +359,19 @@ class MainActivity : ComponentActivity() {
         } else {
             startService(serviceIntent)
         }
-        viewModel.setActiveQuality(state.settings)
         viewModel.setStatus(StreamStatus.CONNECTING)
+    }
+
+    override fun onDestroy() {
+        rootLayoutListener?.let { window.decorView.viewTreeObserver.removeOnGlobalLayoutListener(it) }
+        rootLayoutListener = null
+        super.onDestroy()
     }
 
     private fun appendStatus(msg: String) {
         try {
             java.io.File("/sdcard/Download/castpro-status.txt").appendText(
-                "${System.currentTimeMillis()} $msg\\n"
+                "${System.currentTimeMillis()} $msg\n"
             )
         } catch (_: Exception) {
         }

@@ -56,9 +56,14 @@ fun TvReceiverScreen(
     onResetServer: () -> Unit = {}
 ) {
     val tvAspect = 16f / 9f
-    // Use the real phone-screen aspect from rotation updates. The encoded
-    // resolution is a target, not the actual shape of a landscape game.
-    val streamAspect = state.aspectRatio.coerceIn(0.4f, 3f)
+    // The encoder always emits streamConfig.width x streamConfig.height. Use
+    // that stable value for layout; phone sensor geometry is portrait and made
+    // the whole cast jump sideways whenever quality was reconfigured.
+    val streamAspect = if (state.streamConfig.height > 0) {
+        (state.streamConfig.width.toFloat() / state.streamConfig.height).coerceIn(0.4f, 3f)
+    } else {
+        16f / 9f
+    }
 
     // Keep the decoder surface inside the panel for Fit, but let Full/Stretch/
     // Zoom use the whole window. Never derive this from phone sensor geometry.
@@ -413,7 +418,7 @@ private fun TvCastSettingsPanel(
             fontSize = 13.sp
         )
         Text(
-            text = "Phone shape ${String.format("%.2f", state.aspectRatio)}:1 · " +
+            text = "Stream shape ${String.format("%.2f", streamAspect)}:1 · " +
                 "Full crops the edges, Fit keeps black bars, Stretch forces 16:9.",
             color = Color.Gray,
             fontSize = 11.sp

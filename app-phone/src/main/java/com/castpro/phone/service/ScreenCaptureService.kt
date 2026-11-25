@@ -74,6 +74,7 @@ class ScreenCaptureService : Service() {
     private var currentReceiverName: String = ""
     private var currentConfig: StreamConfig? = null
     private var currentStreamConfigPacket: StreamConfigPacket? = null
+    @Volatile private var currentRotationDegrees: Int = 0
 
     @Volatile
     private var transportConnected = false
@@ -122,7 +123,7 @@ class ScreenCaptureService : Service() {
     private fun appendStatus(msg: String) {
         try {
             java.io.File("/sdcard/Download/castpro-status.txt").appendText(
-                "${System.currentTimeMillis()} $msg\\n"
+                "${System.currentTimeMillis()} $msg\n"
             )
         } catch (_: Exception) {
         }
@@ -255,6 +256,7 @@ class ScreenCaptureService : Service() {
                     height = height,
                     fps = fps,
                     bitrate = bitrate,
+                    rotationDegrees = currentRotationDegrees,
                     isGamingMode = isGamingMode
                 )
                 // The TV reconfigures its decoder on this packet, so send it
@@ -293,18 +295,29 @@ class ScreenCaptureService : Service() {
                         throw IllegalStateException("Could not create the capture display")
                     }
                 } else {
-                    // Same MediaProjection, new encoder surface. This is the
-                    // only supported way to change codec/resolution live.
+                    // Same MediaProjection, but the capture display itself must
+                    // be resized. Swapping only the encoder surface left the
+                    // old-size mirror scaling into a new-size format, which the
+                    // TV saw as a horizontal shift. VirtualDisplay.resize()
+                    // keeps the mirror geometry in step with the encoder.
+                    runCatching { oldDisplay.resize(width, height, dpi) }
+                        .onFailure { Log.w(tag, "VirtualDisplay.resize was rejected", it) }
                     oldDisplay.setSurface(inputSurface)
                     virtualDisplay = oldDisplay
+                    // Keep rotation metadata aligned with the new pipeline.
+                    resolutionMonitor?.checkAndNotifyGeometry(force = true)
                 }
                 sendHeartbeat(tcp)
                 enc.requestKeyFrame()
                 CastSessionBus.setError(null)
                 updateNotification("Streaming ${width}×${height} @ ${fps}FPS • quality updated")
+                CastSessionBus.setAppliedQuality(
+                    "${width}x${height} · ${fps} fps · ${codec.substringAfterLast('/').uppercase()}"
+                )
                 appendStatus("applyLiveConfig done")
             } catch (e: Exception) {
                 Log.e(tag, "Could not apply live quality change", e)
+                CastSessionBus.setAppliedQuality(null)
                 CastSessionBus.setError("Could not apply quality: ${e.message ?: "encoder error"}")
                 appendStatus("applyLiveConfig failed: ${e.message}")
             }
@@ -402,6 +415,7 @@ class ScreenCaptureService : Service() {
                     height = height,
                     fps = fps,
                     bitrate = bitrate,
+                    rotationDegrees = currentRotationDegrees,
                     isGamingMode = isGamingMode
                 )
                 val project = (getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager)
@@ -522,6 +536,7 @@ class ScreenCaptureService : Service() {
 
                 // 3. Geometry/orientation updates for both receivers.
                 val monitor = ScreenResolutionMonitor(this@ScreenCaptureService) { geometry ->
+                    currentRotationDegrees = geometry.rotationDegrees
                     webServer?.broadcastGeometry(geometry)
                     transport?.let { sendGeometry(it, geometry) }
                 }
@@ -544,6 +559,9 @@ class ScreenCaptureService : Service() {
                     if (webEnabled) "Web: http://${LocalNetwork.activeIpv4(this@ScreenCaptureService)}:$safeWebPort" else null
                 ).joinToString(" • ")
                 updateNotification("Streaming $width×$height @ ${fps}FPS${if (destination.isBlank()) "" else " • $destination"}")
+                CastSessionBus.setAppliedQuality(
+                    "${width}x${height} · ${fps} fps · ${codec.substringAfterLast('/').uppercase()}"
+                )
                 Log.i(tag, "Screen casting pipeline started (host='$host', web=$webEnabled)")
             } catch (e: Exception) {
                 Log.e(tag, "Failed to start streaming pipeline", e)

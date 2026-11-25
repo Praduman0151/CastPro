@@ -244,16 +244,9 @@ class PhoneStreamViewModel(application: Application) : AndroidViewModel(applicat
             }
             app.startForegroundService(intent)
             _uiState.update {
-                it.copy(
-                    activeQualityLabel = qualityLabel(settings),
-                    connectionStatus = "Applying ${qualityLabel(settings)}…"
-                )
+                it.copy(connectionStatus = "Applying ${qualityLabel(settings)}…")
             }
         }
-    }
-
-    fun setActiveQuality(settings: StreamingSettings) {
-        _uiState.update { it.copy(activeQualityLabel = qualityLabel(settings)) }
     }
 
     fun qualityLabel(settings: StreamingSettings): String =
@@ -388,6 +381,10 @@ class PhoneStreamViewModel(application: Application) : AndroidViewModel(applicat
         return state.settings.toStreamConfig(targetPort = target?.port ?: state.receiverPort)
     }
 
+    fun setError(message: String) {
+        _uiState.update { it.copy(errorMessage = message) }
+    }
+
     fun clearError() {
         _uiState.update { it.copy(errorMessage = null) }
     }
@@ -443,6 +440,11 @@ class PhoneStreamViewModel(application: Application) : AndroidViewModel(applicat
                     }
                 },
                 metrics = metrics,
+                activeQualityLabel = if (telemetry.isStreaming) {
+                    telemetry.appliedQualityLabel ?: state.activeQualityLabel
+                } else {
+                    ""
+                },
                 isReceiverConnected = connected,
                 connectionStatus = statusText,
                 sessionStats = state.sessionStats.copy(
