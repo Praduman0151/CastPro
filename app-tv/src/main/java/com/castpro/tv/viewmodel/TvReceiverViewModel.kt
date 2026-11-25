@@ -239,9 +239,15 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
                 }
             }
         )
-        server.start()
-        socketServer = server
-        _uiState.update { it.copy(isServerRunning = true) }
+        if (server.start()) {
+            socketServer = server
+            _uiState.update { it.copy(isServerRunning = true, connectionError = null) }
+        } else {
+            // start() already reported the error and scheduled a retry. Keep
+            // the failed instance out of socketServer so the retry cannot stop
+            // a healthy listener owned by another receiver instance.
+            socketServer = null
+        }
     }
 
     private fun applyStreamConfig(packet: StreamConfigPacket) {

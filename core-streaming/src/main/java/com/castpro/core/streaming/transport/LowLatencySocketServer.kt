@@ -33,21 +33,25 @@ class LowLatencySocketServer(
     private val isRunning = AtomicBoolean(false)
     private var serverThread: Thread? = null
 
-    fun start() {
-        if (!isRunning.compareAndSet(false, true)) return
+    fun start(): Boolean {
+        if (!isRunning.compareAndSet(false, true)) return false
+        var socket: ServerSocket? = null
         try {
-            val ss = ServerSocket()
-            ss.reuseAddress = true
-            ss.bind(InetSocketAddress(port))
-            serverSocket = ss
+            socket = ServerSocket()
+            socket.reuseAddress = true
+            socket.bind(InetSocketAddress(port))
+            serverSocket = socket
             Log.i(tag, "Low-latency receiver listening on port $port")
         } catch (e: Exception) {
+            // Never leave an unbound socket behind: it keeps the fd alive and
+            // makes the next retry look like the port is still occupied.
+            runCatching { socket?.close() }
             isRunning.set(false)
             Log.e(tag, "Could not bind receiver port $port", e)
             runCatching {
-                onError("Receiver port $port is busy. Close the other Cast Pro window and try again.")
+                onError("Receiver port $port is busy. Retrying automatically…")
             }
-            return
+            return false
         }
 
         serverThread = Thread({
@@ -82,6 +86,7 @@ class LowLatencySocketServer(
                 }
             }
         }, "CastPro-Server-Thread").apply { isDaemon = true; start() }
+        return true
     }
 
     private fun handleClientStream(inputStream: InputStream) {
