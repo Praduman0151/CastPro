@@ -1,6 +1,7 @@
 package com.castpro.core.streaming.network
 
 import android.content.Context
+import android.net.Network
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.util.Log
@@ -34,6 +35,57 @@ object LocalNetwork {
             score to address
         }
         return candidates.maxByOrNull { it.first }?.takeIf { it.first > 0 }?.second?.hostAddress
+    }
+
+    /**
+     * Pick the Wi-Fi/Ethernet network that owns the local LAN. Binding UDP
+     * discovery to this network avoids sending broadcasts through VPN or
+     * auxiliary interfaces (which can be rejected with EPERM on Android).
+     */
+    fun activeLanNetwork(context: Context): Network? {
+        val manager = context.getSystemService(ConnectivityManager::class.java) ?: return null
+        return manager.allNetworks.mapNotNull { network ->
+            val capabilities = manager.getNetworkCapabilities(network) ?: return@mapNotNull null
+            val score = when {
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> 2
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> 1
+                else -> 0
+            }
+            if (score == 0) return@mapNotNull null
+            val properties = manager.getLinkProperties(network) ?: return@mapNotNull null
+            val hasIpv4 = properties.linkAddresses.any {
+                it.address is Inet4Address && !it.address.isLoopbackAddress && !it.address.isLinkLocalAddress
+            }
+            if (hasIpv4) score to network else null
+        }.maxByOrNull { it.first }?.second
+    }
+
+    /**
+     * Return only broadcast addresses belonging to the selected LAN network.
+     * This prevents probes from being sent to unrelated VPN/tunnel interfaces.
+     */
+    fun broadcastAddresses(context: Context, network: Network?): List<InetAddress> {
+        val manager = context.getSystemService(ConnectivityManager::class.java)
+        val properties = network?.let { manager?.getLinkProperties(it) }
+        val addresses = properties?.linkAddresses?.mapNotNull { link ->
+            val ipv4 = link.address as? Inet4Address ?: return@mapNotNull null
+            val prefix = link.prefixLength
+            if (prefix !in 1..30) return@mapNotNull null
+            val ip = ipv4.address.fold(0L) { value, byte ->
+                (value shl 8) or (byte.toLong() and 0xffL)
+            }
+            val mask = (0xffffffffL shl (32 - prefix)) and 0xffffffffL
+            val broadcast = (ip and mask) or (mask.inv() and 0xffffffffL)
+            InetAddress.getByAddress(
+                byteArrayOf(
+                    (broadcast shr 24).toByte(),
+                    (broadcast shr 16).toByte(),
+                    (broadcast shr 8).toByte(),
+                    broadcast.toByte()
+                )
+            )
+        }?.distinct().orEmpty()
+        return addresses.ifEmpty { listOf(limitedBroadcast()) }
     }
 
     fun isWifiOrEthernet(context: Context): Boolean {

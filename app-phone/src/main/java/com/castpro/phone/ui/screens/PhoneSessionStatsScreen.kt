@@ -81,9 +81,13 @@ fun PhoneSessionStatsScreen(
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
             TelemetryMetricCard(
                 title = "LATENCY",
-                value = "${stats.currentLatencyMs.toInt()} ms",
+                value = if (stats.currentLatencyMs >= 0f && stats.currentLatencyMs.isFinite()) "${stats.currentLatencyMs.toInt()} ms" else "—",
                 icon = Icons.Default.Timer,
-                color = if (stats.currentLatencyMs < 35f) GamerNeonGreen else Color(0xFFFFB300),
+                color = when {
+                    stats.currentLatencyMs < 0f || !stats.currentLatencyMs.isFinite() -> Color.LightGray
+                    stats.currentLatencyMs < 35f -> GamerNeonGreen
+                    else -> Color(0xFFFFB300)
+                },
                 modifier = Modifier.weight(1f)
             )
             TelemetryMetricCard(

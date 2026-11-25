@@ -72,9 +72,9 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
 
     /** Clock difference between TV and phone, learned from heartbeat packets. */
     @Volatile
-    private var clockOffsetNs: Long = 0L
+    private var clockOffsetNs: Long? = null
 
-    fun currentClockOffsetNs(): Long = clockOffsetNs
+    fun currentClockOffsetNs(): Long? = clockOffsetNs
 
     /**
      * The phone stamps heartbeats with its wall clock. Their arrival time lets
@@ -82,6 +82,7 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
      * is required for a meaningful one-way latency figure.
      */
     fun noteHeartbeat(senderTimestampNs: Long) {
+        if (senderTimestampNs <= 0L) return
         val receiveNs = System.currentTimeMillis() * 1_000_000L
         clockOffsetNs = receiveNs - senderTimestampNs - ASSUMED_ONE_WAY_NS
     }

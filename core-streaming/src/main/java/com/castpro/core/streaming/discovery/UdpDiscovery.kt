@@ -1,5 +1,7 @@
 package com.castpro.core.streaming.discovery
 
+import android.content.Context
+import android.net.Network
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
@@ -21,13 +23,16 @@ import java.util.concurrent.atomic.AtomicBoolean
  * name, so a phone can connect without typing an IP address.
  */
 class UdpDiscoveryClient(
+    context: Context,
     private val onReceiverFound: (DiscoveredReceiver) -> Unit,
     private val onError: (String) -> Unit = {}
 ) {
+    private val appContext = context.applicationContext
     private val tag = "UdpDiscoveryClient"
     private val running = AtomicBoolean(false)
     private val sendLock = Any()
     @Volatile private var socket: DatagramSocket? = null
+    @Volatile private var boundNetwork: Network? = null
     private var thread: Thread? = null
     private var reportedError = false
 
@@ -43,10 +48,19 @@ class UdpDiscoveryClient(
 
     private fun runLoop() {
         try {
-            val udp = DatagramSocket().apply {
+            val selectedNetwork = LocalNetwork.activeLanNetwork(appContext)
+            val udp = DatagramSocket(null).apply {
                 broadcast = true
                 soTimeout = 500
             }
+            // Network.bindSocket must happen before bind/connect. The socket
+            // then uses the selected Wi-Fi/Ethernet route even if a VPN or
+            // auxiliary interface is the process default.
+            if (selectedNetwork != null) {
+                selectedNetwork.bindSocket(udp)
+            }
+            udp.bind(InetSocketAddress(0))
+            boundNetwork = selectedNetwork
             socket = udp
             while (running.get()) {
                 sendProbe(udp)
@@ -70,12 +84,13 @@ class UdpDiscoveryClient(
             }
         } finally {
             socket = null
+            boundNetwork = null
         }
     }
 
     private fun sendProbe(udp: DatagramSocket) {
         val request = Constants.DISCOVERY_REQUEST.toByteArray()
-        val targets = LocalNetwork.broadcastAddresses()
+        val targets = LocalNetwork.broadcastAddresses(appContext, boundNetwork)
         synchronized(sendLock) {
             for (target in targets) {
                 try {
@@ -109,6 +124,7 @@ class UdpDiscoveryClient(
         running.set(false)
         runCatching { socket?.close() }
         socket = null
+        boundNetwork = null
         thread?.interrupt()
         thread = null
     }

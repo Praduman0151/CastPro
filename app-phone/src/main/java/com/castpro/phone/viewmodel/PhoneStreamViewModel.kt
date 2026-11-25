@@ -56,6 +56,7 @@ class PhoneStreamViewModel(application: Application) : AndroidViewModel(applicat
     private var qualityApplyJob: Job? = null
     private val nsdHelper = NsdHelper(application)
     private val udpDiscovery = UdpDiscoveryClient(
+        context = application,
         onReceiverFound = ::mergeReceiver,
         onError = { message -> updateConnectionError(message) }
     )
