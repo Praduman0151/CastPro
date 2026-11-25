@@ -344,7 +344,13 @@ class HardwareVideoDecoder(
                     }
                 }
                 if (header < end) {
-                    val nalType = data[header].toInt() and 0x1F
+                    // AVC stores nal_unit_type in the low 5 bits. HEVC
+                    // stores it in bits 1..6 of the 2-byte NAL header.
+                    val nalType = if (hevc) {
+                        (data[header].toInt() ushr 1) and 0x3F
+                    } else {
+                        data[header].toInt() and 0x1F
+                    }
                     if (hevc) {
                         // HEVC IRAP pictures: BLA/IDR/CRA (16..21). VPS/SPS/PPS
                         // (32..34) may precede the picture in the same buffer.
