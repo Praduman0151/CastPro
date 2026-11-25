@@ -51,7 +51,7 @@ fun CastProNeonOverview(state: PhoneUiState, modifier: Modifier = Modifier) {
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text("CASTPRO", color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Black, letterSpacing = 1.5.sp)
-                Text("CAST  ·  PLAY  ·  ENJOY", color = GamerTextSecondary, fontSize = 10.sp, letterSpacing = 2.sp)
+                Text("CAST BEYOND LIMITS  ·  CINEMATIC EDITION", color = GamerTextSecondary, fontSize = 9.sp, letterSpacing = 1.3.sp)
             }
             Row(
                 modifier = Modifier
@@ -80,13 +80,13 @@ fun CastProNeonOverview(state: PhoneUiState, modifier: Modifier = Modifier) {
             shape = RoundedCornerShape(22.dp),
             modifier = Modifier.fillMaxWidth().border(
                 1.dp,
-                Brush.linearGradient(listOf(GamerAccent, GamerNeonGreen.copy(alpha = 0.55f))),
+                Brush.linearGradient(listOf(Color(0xFFFF355D), Color(0xFF7A203D), Color(0xFF402033))),
                 RoundedCornerShape(22.dp)
             )
         ) {
             Column(
                 modifier = Modifier
-                    .background(Brush.linearGradient(listOf(Color(0xFF14243A), Color(0xFF101824), Color(0xFF102A2A))))
+                    .background(Brush.linearGradient(listOf(Color(0xFF351321), Color(0xFF171018), Color(0xFF0D0B12))))
                     .padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
@@ -123,7 +123,7 @@ fun CastProNeonOverview(state: PhoneUiState, modifier: Modifier = Modifier) {
 @Composable
 private fun MetricTile(label: String, value: String, accent: Color, modifier: Modifier = Modifier) {
     Column(
-        modifier = modifier.background(Color(0xFF111B2A), RoundedCornerShape(14.dp))
+        modifier = modifier.background(Color(0xFF21131B), RoundedCornerShape(14.dp))
             .border(1.dp, accent.copy(alpha = 0.28f), RoundedCornerShape(14.dp))
             .padding(horizontal = 8.dp, vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
