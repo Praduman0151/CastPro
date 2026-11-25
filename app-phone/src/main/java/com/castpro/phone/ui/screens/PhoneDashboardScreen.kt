@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.castpro.core.common.model.DiscoveredReceiver
 import com.castpro.phone.ui.components.LatencyHud
+import com.castpro.phone.ui.components.CastProNeonOverview
 import com.castpro.phone.ui.theme.*
 import com.castpro.phone.viewmodel.PhoneUiState
 import com.castpro.phone.viewmodel.StreamStatus
@@ -57,6 +58,8 @@ fun PhoneDashboardScreen(
             .verticalScroll(scrollState),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        CastProNeonOverview(state = state)
+
         if (state.status == StreamStatus.STREAMING) {
             LatencyHud(metrics = state.metrics)
         }
