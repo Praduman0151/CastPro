@@ -58,8 +58,16 @@ fun TvGamerHudOverlay(
                     fontSize = 12.sp
                 )
                 Text(
-                    text = "${String.format("%.1f", metrics.latencyMs)} ms",
-                    color = if (metrics.latencyMs < 40) TvNeonGreen else TvWarning,
+                    text = if (metrics.latencyMs >= 0f && metrics.latencyMs.isFinite()) {
+                        "${String.format("%.1f", metrics.latencyMs)} ms"
+                    } else {
+                        "—"
+                    },
+                    color = when {
+                        metrics.latencyMs < 0f || !metrics.latencyMs.isFinite() -> Color.LightGray
+                        metrics.latencyMs < 40f -> TvNeonGreen
+                        else -> TvWarning
+                    },
                     fontWeight = FontWeight.Bold,
                     fontSize = 12.sp
                 )
@@ -97,8 +105,16 @@ fun TvGamerHudOverlay(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(text = "LATENCY", style = MaterialTheme.typography.labelSmall, color = Color.LightGray, fontSize = 11.sp)
                     Text(
-                        text = "${String.format("%.1f", metrics.latencyMs)} ms",
-                        color = if (metrics.latencyMs < 40) TvNeonGreen else TvWarning,
+                        text = if (metrics.latencyMs >= 0f && metrics.latencyMs.isFinite()) {
+                        "${String.format("%.1f", metrics.latencyMs)} ms"
+                    } else {
+                        "—"
+                    },
+                        color = when {
+                        metrics.latencyMs < 0f || !metrics.latencyMs.isFinite() -> Color.LightGray
+                        metrics.latencyMs < 40f -> TvNeonGreen
+                        else -> TvWarning
+                    },
                         fontWeight = FontWeight.Bold,
                         fontSize = 18.sp
                     )
