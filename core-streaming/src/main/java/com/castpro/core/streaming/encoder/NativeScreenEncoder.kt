@@ -68,6 +68,8 @@ class NativeScreenEncoder(
                 "NDK MediaCodec initialization failed for ${config.codecMime}"
             }
             handle = createdHandle
+            Log.i(TAG, "Native Engine encoder prepared: ${config.codecMime} " +
+                "${config.width}x${config.height}@${config.fps} bitrate=${config.bitrate}")
             nativeGetInputSurface(createdHandle) ?: error("NDK encoder did not return an input Surface")
         } catch (error: Throwable) {
             running.set(false)
@@ -96,6 +98,7 @@ class NativeScreenEncoder(
             if (isCodecConfig) {
                 // Cache even if transport.send() fails while the TV is offline.
                 codecConfigBytes = data.copyOf()
+                Log.i(TAG, "Native encoder codec config cached: ${data.size} bytes")
                 sendCodecConfigLocked()
                 return
             }
@@ -167,6 +170,8 @@ class NativeScreenEncoder(
             synchronized(outputLock) {
                 // The TCP connection callback requests a keyframe after reconnect.
                 // Replay cached codec config first, then ask MediaCodec for an IDR.
+                Log.i(TAG, "Keyframe requested; replaying cached codec config " +
+                    "(${codecConfigBytes?.size ?: 0} bytes)")
                 sendCodecConfigLocked()
                 runCatching { nativeRequestKeyFrame(current) }
                     .onFailure {
