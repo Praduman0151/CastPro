@@ -13,7 +13,8 @@ interface ScreenEncoderBackend {
 
 /**
  * Tries the NDK surface encoder on Android 10+ gaming sessions. If native
- * initialization fails, the established Kotlin MediaCodec path is prepared.
+ * initialization or library loading fails, the established Kotlin MediaCodec
+ * path is prepared instead.
  */
 object ScreenEncoderFactory {
     fun prepare(
@@ -23,17 +24,35 @@ object ScreenEncoderFactory {
         onError: (String) -> Unit = {}
     ): Pair<ScreenEncoderBackend, Surface> {
         if (android.os.Build.VERSION.SDK_INT >= 29 && config.isGamingMode) {
-            val native = NativeScreenEncoder(config, transport, onStats, onError)
+            var native: NativeScreenEncoder? = null
             try {
-                val surface = native.prepare()
-                native.start()
-                return native to surface
-            } catch (error: Throwable) {
-                native.stop()
-                android.util.Log.w("ScreenEncoderFactory", "Native backend unavailable; using Kotlin encoder", error)
+                // Keep construction inside the guarded block: the class initializer
+                // loads the JNI library and can throw UnsatisfiedLinkError before
+                // prepare() is reached on devices/ABIs without the native binary.
+                val candidate = NativeScreenEncoder(config, transport, onStats, onError)
+                native = candidate
+                val surface = candidate.prepare()
+                candidate.start()
+                return candidate to surface
+            } catch (error: LinkageError) {
+                native?.stop()
+                android.util.Log.w(
+                    "ScreenEncoderFactory",
+                    "Native library unavailable; using Kotlin compatibility encoder",
+                    error
+                )
+                onError("Native encoder unavailable; using compatibility encoder")
+            } catch (error: Exception) {
+                native?.stop()
+                android.util.Log.w(
+                    "ScreenEncoderFactory",
+                    "Native encoder initialization failed; using Kotlin compatibility encoder",
+                    error
+                )
                 onError("Native encoder unavailable; using compatibility encoder")
             }
         }
+
         val compatibility = HardwareScreenEncoder(
             config = config,
             transport = transport,
