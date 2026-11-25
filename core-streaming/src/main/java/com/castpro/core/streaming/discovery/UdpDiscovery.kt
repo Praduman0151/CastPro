@@ -48,7 +48,7 @@ class UdpDiscoveryClient(
 
     private fun runLoop() {
         try {
-            val selectedNetwork = LocalNetwork.activeLanNetwork(context)
+            val selectedNetwork = LocalNetwork.activeLanNetwork(appContext)
             val udp = DatagramSocket(null).apply {
                 broadcast = true
                 soTimeout = 500
