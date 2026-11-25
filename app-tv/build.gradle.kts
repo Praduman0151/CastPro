@@ -14,7 +14,7 @@ android {
         applicationId = "com.castpro.tv"
         minSdk = 26
         targetSdk = 35
-        versionCode = 14
+        versionCode = System.getenv("CASTPRO_VERSION_CODE")?.toIntOrNull() ?: 14
         versionName = System.getenv("CASTPRO_VERSION_NAME") ?: "1.0.6"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
