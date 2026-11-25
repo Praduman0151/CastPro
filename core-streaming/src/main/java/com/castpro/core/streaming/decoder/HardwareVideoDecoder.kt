@@ -34,6 +34,8 @@ class HardwareVideoDecoder(
     private var frameCount = 0
     private var bytesInWindow = 0L
     private var lastFpsTimestamp = System.currentTimeMillis()
+    private var loggedInputPackets = 0
+    private var loggedOutputBuffers = 0
 
     @Volatile private var decodedWidth: Int = config.width
     @Volatile private var decodedHeight: Int = config.height
@@ -188,6 +190,13 @@ class HardwareVideoDecoder(
             // The sender marks IDRs; the byte scan is only a fallback for
             // older senders that emit Annex-B start codes.
             val keyFrame = isKeyframe || isKeyFrame(data, offset, length)
+            if (loggedInputPackets < 5) {
+                loggedInputPackets++
+                Log.i(
+                    tag,
+                    "Video input #$loggedInputPackets bytes=$length codecConfig=$isCodecConfig keyframe=$keyFrame"
+                )
+            }
             if (mediaCodec == null && keyFrame && surface.isValid) {
                 // A previous decode error stopped the codec. Rebuild it on the
                 // next IDR instead of leaving the TV on a frozen frame.
@@ -253,6 +262,13 @@ class HardwareVideoDecoder(
             }
             if (outputIndex < 0) break
 
+            if (loggedOutputBuffers < 5) {
+                loggedOutputBuffers++
+                Log.i(
+                    tag,
+                    "Decoded output #$loggedOutputBuffers size=${info.size} flags=${info.flags} ptsUs=${info.presentationTimeUs}"
+                )
+            }
             codec.releaseOutputBuffer(outputIndex, true)
             frameCount++
 
