@@ -1,6 +1,6 @@
 # CastPro — User Guide
 
-*Current release: [v1.0.5](https://github.com/Praduman0151/CastPro/releases/tag/v1.0.5)*
+*Current release: [v1.0.6](https://github.com/Praduman0151/CastPro/releases/tag/v1.0.6)*
 
 ## About CastPro
 
@@ -14,8 +14,8 @@ Latency depends on the phone, TV, encoder, decoder, Wi-Fi path and selected qual
 
 | App | Target device | Download |
 | --- | --- | --- |
-| CastPro Phone | Android 8.0+ phone | [`CastPro-Phone-debug.apk`](https://github.com/Praduman0151/CastPro/releases/download/v1.0.5/CastPro-Phone-debug.apk) |
-| CastPro TV | Android TV / Google TV, API 26+ | [`CastPro-TV-debug.apk`](https://github.com/Praduman0151/CastPro/releases/download/v1.0.5/CastPro-TV-debug.apk) |
+| CastPro Phone | Android 8.0+ phone | [`CastPro-Phone-debug.apk`](https://github.com/Praduman0151/CastPro/releases/download/v1.0.6/CastPro-Phone-debug.apk) |
+| CastPro TV | Android TV / Google TV, API 26+ | [`CastPro-TV-debug.apk`](https://github.com/Praduman0151/CastPro/releases/download/v1.0.6/CastPro-TV-debug.apk) |
 
 Install the phone APK normally after allowing installation from your file manager.
 
@@ -87,7 +87,7 @@ Live quality changes reuse the existing screen-capture permission, swap the enco
 
 ## 9. Current verification status
 
-- CI compiles both phone and TV APKs for v1.0.5.
+- CI compiles both phone and TV APKs for v1.0.6.
 - Earlier Phase 1 testing recorded 20 consecutive quality changes without root-layout or surface-bound movement.
 - Full-screen Stretch verification with PUBG Mobile on the OnePlus Nord 5 and TCL Android TV is still pending.
 - UDP transport and USB-assisted casting are experimental documents/prototypes, not active production features.
