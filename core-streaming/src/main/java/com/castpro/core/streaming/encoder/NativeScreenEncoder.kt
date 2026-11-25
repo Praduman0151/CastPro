@@ -38,6 +38,9 @@ class NativeScreenEncoder(
     private val sequence = AtomicInteger(0)
     private val running = AtomicBoolean(false)
     private val outputLock = Any()
+    // Serialize JNI control calls against nativeStop() without holding outputLock
+    // while nativeStop joins the drain thread.
+    private val nativeCallLock = Any()
     @Volatile private var handle = 0L
     private var codecConfigBytes: ByteArray? = null
     private var frames = 0L
@@ -158,32 +161,40 @@ class NativeScreenEncoder(
     }
 
     override fun requestKeyFrame() {
-        val current = handle
-        if (current == 0L) return
-        synchronized(outputLock) {
-            // The TCP connection callback requests a keyframe after reconnect.
-            // Replay cached codec config first, then ask MediaCodec for an IDR.
-            sendCodecConfigLocked()
-            runCatching { nativeRequestKeyFrame(current) }
-                .onFailure {
-                    Log.w(TAG, "Native keyframe request failed", it)
-                    onError("Could not request a fresh video keyframe")
-                }
+        synchronized(nativeCallLock) {
+            val current = handle
+            if (current == 0L || !running.get()) return
+            synchronized(outputLock) {
+                // The TCP connection callback requests a keyframe after reconnect.
+                // Replay cached codec config first, then ask MediaCodec for an IDR.
+                sendCodecConfigLocked()
+                runCatching { nativeRequestKeyFrame(current) }
+                    .onFailure {
+                        Log.w(TAG, "Native keyframe request failed", it)
+                        onError("Could not request a fresh video keyframe")
+                    }
+            }
         }
     }
 
     fun updateBitrate(bitrate: Int) {
-        val current = handle
-        if (current != 0L) runCatching { nativeUpdateBitrate(current, bitrate) }
-            .onFailure { Log.w(TAG, "Native bitrate update failed", it) }
+        synchronized(nativeCallLock) {
+            val current = handle
+            if (current != 0L && running.get()) {
+                runCatching { nativeUpdateBitrate(current, bitrate) }
+                    .onFailure { Log.w(TAG, "Native bitrate update failed", it) }
+            }
+        }
     }
 
     override fun stop() {
         running.set(false)
-        val current = handle
-        handle = 0L
-        if (current != 0L) runCatching { nativeStop(current) }
-            .onFailure { Log.w(TAG, "Native encoder shutdown failed", it) }
+        synchronized(nativeCallLock) {
+            val current = handle
+            handle = 0L
+            if (current != 0L) runCatching { nativeStop(current) }
+                .onFailure { Log.w(TAG, "Native encoder shutdown failed", it) }
+        }
         synchronized(outputLock) {
             codecConfigBytes = null
         }
