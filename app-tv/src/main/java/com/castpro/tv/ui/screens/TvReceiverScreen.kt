@@ -15,8 +15,13 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -28,6 +33,7 @@ import com.castpro.core.common.protocol.Constants
 import com.castpro.tv.ui.components.TvGamerHudOverlay
 import com.castpro.tv.ui.components.TvNeonBlue
 import com.castpro.tv.ui.components.TvNeonGreen
+import com.castpro.tv.ui.components.TvWarning
 import com.castpro.tv.viewmodel.TvColorFilter
 import com.castpro.tv.viewmodel.TvDisplayMode
 import com.castpro.tv.viewmodel.TvUiState
@@ -41,7 +47,8 @@ fun TvReceiverScreen(
     onColorFilterChanged: (TvColorFilter) -> Unit = {},
     onCycleDisplayMode: () -> Unit = {},
     onCycleColorFilter: () -> Unit = {},
-    onToggleSettings: () -> Unit = {}
+    onToggleSettings: () -> Unit = {},
+    onResetServer: () -> Unit = {}
 ) {
     val tvAspect = 16f / 9f
     // Use the real phone-screen aspect from rotation updates. The encoded
@@ -192,6 +199,11 @@ fun TvReceiverScreen(
                             fontSize = 12.sp
                         )
 
+                        TvResetButton(
+                            onClick = onResetServer,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+
                         Text(
                             text = "DISPLAY MODE",
                             color = TvNeonBlue,
@@ -283,6 +295,7 @@ fun TvReceiverScreen(
                     state = state,
                     onDisplayModeChanged = onDisplayModeChanged,
                     onColorFilterChanged = onColorFilterChanged,
+                    onResetServer = onResetServer,
                     onClose = onToggleSettings,
                     modifier = Modifier.align(Alignment.Center)
                 )
@@ -296,6 +309,7 @@ private fun TvCastSettingsPanel(
     state: TvUiState,
     onDisplayModeChanged: (TvDisplayMode) -> Unit,
     onColorFilterChanged: (TvColorFilter) -> Unit,
+    onResetServer: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -390,6 +404,10 @@ private fun TvCastSettingsPanel(
             color = Color.Gray,
             fontSize = 11.sp
         )
+        TvResetButton(
+            onClick = onResetServer,
+            modifier = Modifier.padding(top = 4.dp)
+        )
     }
 }
 
@@ -399,25 +417,80 @@ private fun TvChip(
     selected: Boolean,
     onClick: () -> Unit
 ) {
+    var focused by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(8.dp)
+    val accent = when {
+        selected -> TvNeonGreen
+        focused -> TvNeonBlue
+        else -> Color(0xFF30363D)
+    }
     Box(
         modifier = Modifier
+            .onFocusChanged { focused = it.isFocused }
+            .then(
+                if (selected) Modifier.shadow(
+                    elevation = 8.dp,
+                    ambientColor = TvNeonGreen.copy(alpha = 0.6f),
+                    spotColor = TvNeonGreen.copy(alpha = 0.6f),
+                    shape = shape
+                ) else Modifier
+            )
             .background(
-                if (selected) TvNeonGreen.copy(alpha = 0.22f) else Color(0xFF161B22),
-                RoundedCornerShape(6.dp)
+                when {
+                    selected -> TvNeonGreen.copy(alpha = 0.30f)
+                    focused -> TvNeonBlue.copy(alpha = 0.18f)
+                    else -> Color(0xFF161B22)
+                },
+                shape
             )
             .border(
-                1.dp,
-                if (selected) TvNeonGreen else Color(0xFF30363D),
-                RoundedCornerShape(6.dp)
+                if (selected || focused) 2.dp else 1.dp,
+                accent,
+                shape
             )
             .clickable { onClick() }
-            .padding(horizontal = 8.dp, vertical = 5.dp)
+            .padding(horizontal = 10.dp, vertical = 6.dp)
     ) {
         Text(
-            text = label,
-            color = if (selected) TvNeonGreen else Color.LightGray,
+            text = if (selected) "● $label" else label,
+            color = when {
+                selected -> Color.White
+                focused -> TvNeonBlue
+                else -> Color.LightGray
+            },
             fontSize = 11.sp,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+            fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium
+        )
+    }
+}
+
+@Composable
+private fun TvResetButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var focused by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(8.dp)
+    Box(
+        modifier = modifier
+            .onFocusChanged { focused = it.isFocused }
+            .background(
+                if (focused) TvWarning.copy(alpha = 0.30f) else Color(0xFF2A141B),
+                shape
+            )
+            .border(
+                if (focused) 2.dp else 1.dp,
+                if (focused) TvNeonBlue else TvWarning.copy(alpha = 0.8f),
+                shape
+            )
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 7.dp)
+    ) {
+        Text(
+            text = "RESET SERVER",
+            color = if (focused) TvNeonBlue else Color(0xFFFF8A80),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold
         )
     }
 }

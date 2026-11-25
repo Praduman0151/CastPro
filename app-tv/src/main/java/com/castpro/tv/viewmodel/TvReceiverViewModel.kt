@@ -191,6 +191,23 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
         createServer()
     }
 
+    /** Manual escape hatch for a stuck port or a stale listener. */
+    fun resetServer() {
+        retryJob?.cancel()
+        retryJob = null
+        socketServer?.stop()
+        socketServer = null
+        _uiState.update {
+            it.copy(
+                connectionError = null,
+                isServerRunning = false,
+                isStreaming = false,
+                clientIp = null
+            )
+        }
+        createServer()
+    }
+
     private fun createServer() {
         // The old listener still owns the port after an accept/bind error;
         // stop it before retrying or every retry fails with "address in use".

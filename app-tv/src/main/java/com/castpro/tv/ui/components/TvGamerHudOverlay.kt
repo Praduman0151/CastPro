@@ -90,20 +90,34 @@ fun TvGamerHudOverlay(
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "DISPLAY: ${displayMode.label}",
-                color = TvNeonGreen,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.clickable { onCycleDisplayMode() }
-            )
-            Text(
-                text = "COLOR: ${colorFilter.label}",
-                color = TvNeonBlue,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.clickable { onCycleColorFilter() }
-            )
+            Box(
+                modifier = Modifier
+                    .background(TvNeonGreen.copy(alpha = 0.18f), RoundedCornerShape(6.dp))
+                    .border(1.dp, TvNeonGreen.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
+                    .clickable { onCycleDisplayMode() }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    text = "● DISPLAY: ${displayMode.label}",
+                    color = TvNeonGreen,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .background(TvNeonBlue.copy(alpha = 0.18f), RoundedCornerShape(6.dp))
+                    .border(1.dp, TvNeonBlue.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
+                    .clickable { onCycleColorFilter() }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    text = "● COLOR: ${colorFilter.label}",
+                    color = TvNeonBlue,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
             if (metrics.targetBitrateMbps > 0f) {
                 Text(
                     text = "TARGET ${String.format("%.0f", metrics.targetBitrateMbps)}M",

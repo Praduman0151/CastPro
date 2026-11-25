@@ -50,6 +50,7 @@ class TvMainActivity : ComponentActivity() {
                 onCycleDisplayMode = { viewModel.cycleDisplayMode() },
                 onCycleColorFilter = { viewModel.cycleColorFilter() },
                 onToggleSettings = { viewModel.toggleSettingsPanel() },
+                onResetServer = { viewModel.resetServer() },
                 onSurfaceCreated = { surfaceView ->
                     val renderer = TvSurfaceRenderer(
                         surfaceView = surfaceView,
