@@ -40,6 +40,9 @@ class HardwareVideoDecoder(
     private var lastFpsTimestamp = System.currentTimeMillis()
     private var loggedInputPackets = 0
     private var loggedOutputBuffers = 0
+    @Volatile private var outputDrainThread: Thread? = null
+    @Volatile private var lastInputTimestampNano: Long = 0L
+    @Volatile private var lastInputGamingMode: Boolean = false
 
     @Volatile private var decodedWidth: Int = config.width
     @Volatile private var decodedHeight: Int = config.height
@@ -147,9 +150,10 @@ class HardwareVideoDecoder(
                 resetMetrics()
                 Log.i(
                     tag,
-                    "Decoder started: ${preferredName ?: "hardware"} " +
-                        "${config.codecMime} ${width}x${height}"
+                    "Decoder started: name=${codec.name} preferred=${preferredName ?: "hardware"} " +
+                        "${config.codecMime} ${width}x${height} format=$format"
                 )
+                startOutputDrain(codec)
                 onError("")
                 return
             } catch (e: Exception) {
@@ -238,6 +242,8 @@ class HardwareVideoDecoder(
             // The sender marks IDRs; the byte scan is only a fallback for
             // older senders that emit Annex-B start codes.
             val keyFrame = isKeyframe || isKeyFrame(data, offset, length)
+            lastInputTimestampNano = timestampNano
+            lastInputGamingMode = isGamingMode
             if (loggedInputPackets < 10) {
                 loggedInputPackets++
                 Log.i(
@@ -324,15 +330,38 @@ class HardwareVideoDecoder(
                 stopCodec()
                 decodeGate.resetForFlush()
                 onError(e.message ?: "Video decoder error")
-            } finally {
-                // Output can be produced after an earlier input queue operation,
-                // not only after the most recent successful queue. Draining here
-                // prevents already-decoded frames from sitting unrendered while
-                // the network thread waits for the next packet.
-                if (running.get() && mediaCodec === codec) {
-                    drainOutput(codec, timestampNano, isGamingMode)
+            }
+        }
+    }
+
+    /** Drain decoded frames independently of TCP packet arrival. */
+    private fun startOutputDrain(codec: MediaCodec) {
+        outputDrainThread = Thread({
+            while (running.get() && mediaCodec === codec) {
+                try {
+                    synchronized(lock) {
+                        if (running.get() && mediaCodec === codec) {
+                            drainOutput(codec, lastInputTimestampNano, lastInputGamingMode)
+                        }
+                    }
+                    Thread.sleep(5)
+                } catch (interrupted: InterruptedException) {
+                    break
+                } catch (error: Throwable) {
+                    Log.e(tag, "Decoder output drain failed", error)
+                    synchronized(lock) {
+                        if (mediaCodec === codec) {
+                            stopCodec()
+                            decodeGate.resetForFlush()
+                            onError(error.message ?: "Video output drain failed")
+                        }
+                    }
+                    break
                 }
             }
+        }, "CastPro-Decoder-Output").apply {
+            isDaemon = true
+            start()
         }
     }
 
@@ -364,8 +393,13 @@ class HardwareVideoDecoder(
             // Empty/config buffers are not pictures. Rendering them produces a
             // blank/green TextureView update and inflates the FPS counter.
             val render = info.size > 0 && !isConfigOutput
-            codec.releaseOutputBuffer(outputIndex, render)
-            if (render) frameCount++
+            if (render) {
+                // Count a frame only after Surface release succeeds.
+                codec.releaseOutputBuffer(outputIndex, true)
+                frameCount++
+            } else {
+                codec.releaseOutputBuffer(outputIndex, false)
+            }
 
             val nowMs = System.currentTimeMillis()
             if (nowMs - lastFpsTimestamp >= 1_000) {
@@ -470,6 +504,8 @@ class HardwareVideoDecoder(
 
     private fun stopCodec() {
         running.set(false)
+        outputDrainThread?.interrupt()
+        outputDrainThread = null
         try {
             mediaCodec?.stop()
         } catch (_: Exception) {
