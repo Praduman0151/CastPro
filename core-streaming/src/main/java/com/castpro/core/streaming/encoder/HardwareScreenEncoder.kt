@@ -67,70 +67,69 @@ class HardwareScreenEncoder(
     }
 
     private fun createConfiguredEncoder(): MediaCodec {
+        val codec = MediaCodec.createEncoderByType(config.codecMime)
+        val baselineLevel = if (config.codecMime.equals(MediaFormat.MIMETYPE_VIDEO_AVC, ignoreCase = true)) {
+            runCatching {
+                codec.codecInfo.getCapabilitiesForType(config.codecMime).profileLevels
+                    .filter { it.profile == MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline }
+                    .maxByOrNull { it.level }
+            }.onFailure { Log.w(tag, "Could not inspect advertised AVC profiles; omitting profile/level keys", it) }
+                .getOrNull()
+        } else null
+
         val fullFormat = MediaFormat.createVideoFormat(config.codecMime, config.width, config.height).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, config.bitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, config.fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, Constants.DEFAULT_I_FRAME_INTERVAL)
-            if (config.codecMime.equals(MediaFormat.MIMETYPE_VIDEO_AVC, ignoreCase = true)) {
-                // Keep the production AVC path 8-bit SDR and broadly compatible
-                // with Android TV hardware decoders.
+            // Only request Baseline when this exact encoder advertises it. Pair
+            // it with that profile's highest advertised level (including 4.2
+            // when supported for 1080p60).
+            baselineLevel?.let {
                 setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+                setInteger(MediaFormat.KEY_LEVEL, it.level)
+                Log.i(tag, "Requesting advertised AVC Baseline level=${it.level}")
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709)
                 setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO)
                 setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
             }
-            // CBR starves fast motion (scrolling, camera pans) because it cannot
-            // spend extra bits when a frame gets complex. VBR keeps the same
-            // average bitrate but lets the encoder preserve detail on motion.
             setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
             setInteger(MediaFormat.KEY_LATENCY, 0)
             setInteger(MediaFormat.KEY_PRIORITY, 0)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
-                // An IDR without SPS/PPS cannot start a decoder. Keep the
-                // parameter sets in front of every sync frame, both for the
-                // first connection and for reconnects.
                 runCatching { setInteger(MediaFormat.KEY_PREPEND_HEADER_TO_SYNC_FRAMES, 1) }
             }
         }
 
-        val codec = MediaCodec.createEncoderByType(config.codecMime)
         try {
             codec.configure(fullFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
             return codec
-        } catch (e: Exception) {
-            Log.w(tag, "Low-latency MediaFormat rejected; retrying with the safe profile", e)
-            codec.release()
+        } catch (primaryError: Exception) {
+            Log.w(tag, "Primary encoder format rejected; retrying clean minimal fallback without profile/level/color keys", primaryError)
+            runCatching { codec.release() }
         }
 
-        // Some Android TV/phone encoders reject low-latency or CBR keys even
-        // though the codec itself works. Keep the stream alive with the
-        // conservative format rather than failing the whole session.
-        val safeFormat = MediaFormat.createVideoFormat(config.codecMime, config.width, config.height).apply {
+        // Deliberately contain only universally required surface-encoder keys.
+        // This strips KEY_PROFILE, KEY_LEVEL, KEY_COLOR_STANDARD,
+        // KEY_COLOR_TRANSFER and KEY_COLOR_RANGE, plus optional tuning keys.
+        val fallbackFormat = MediaFormat.createVideoFormat(config.codecMime, config.width, config.height).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, config.bitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, config.fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, Constants.DEFAULT_I_FRAME_INTERVAL)
-            if (config.codecMime.equals(MediaFormat.MIMETYPE_VIDEO_AVC, ignoreCase = true)) {
-                setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709)
-                setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO)
-                setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
-            }
         }
-        val safeCodec = MediaCodec.createEncoderByType(config.codecMime)
+        val fallbackCodec = MediaCodec.createEncoderByType(config.codecMime)
         try {
-            safeCodec.configure(safeFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            return safeCodec
-        } catch (e: Exception) {
-            safeCodec.release()
+            Log.w(tag, "Using clean minimal encoder fallback: ${config.codecMime} ${config.width}x${config.height}")
+            fallbackCodec.configure(fallbackFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            return fallbackCodec
+        } catch (fallbackError: Exception) {
+            runCatching { fallbackCodec.release() }
             onError("This device has no usable ${config.codecMime} encoder")
-            throw e
+            throw fallbackError
         }
     }
 
