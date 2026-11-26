@@ -23,7 +23,8 @@ class HardwareVideoDecoder(
     initialScalingMode: Int = MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING,
     private val onMetricsUpdated: (LatencyMetrics) -> Unit,
     private val onError: (String) -> Unit = {},
-    private val clockOffsetProvider: () -> Long? = { null }
+    private val clockOffsetProvider: () -> Long? = { null },
+    initialCodecConfig: ByteArray? = null
 ) {
     private val tag = "HardwareVideoDecoder"
     private val lock = Any()
@@ -33,7 +34,9 @@ class HardwareVideoDecoder(
     private val decodeGate = VideoDecodeGate()
     // MediaCodec loses codec-specific data on flush/reconfigure/restart. Keep
     // the last SPS/PPS (or VPS/SPS/PPS) so every new codec can be primed.
-    private var cachedCodecConfig: ByteArray? = null
+    private var cachedCodecConfig: ByteArray? = initialCodecConfig?.let { bytes ->
+        AnnexBCodecConfig.extractParameterSets(config.codecMime, bytes)
+    }
 
     private var frameCount = 0
     private var bytesInWindow = 0L
@@ -280,6 +283,17 @@ class HardwareVideoDecoder(
                     return
                 }
 
+                // Surface recreation may seed this decoder with the session CSD.
+                // As a second line of defense, recover if a sender bundles valid
+                // parameter sets and an IDR into the same Annex-B access unit.
+                if (!decodeGate.hasCodecConfig() && keyFrame) {
+                    val inlineConfig = decodeGate.extractInlineParameterSets(config.codecMime, data, offset, length)
+                    if (inlineConfig != null && queueCodecConfig(codec, inlineConfig, 0, inlineConfig.size)) {
+                        cachedCodecConfig = inlineConfig
+                        decodeGate.markCodecConfigAvailable()
+                        Log.i(tag, "Recovered codec config inline with IDR: ${inlineConfig.size} bytes")
+                    }
+                }
                 // An IDR alone is not enough: require validated SPS/PPS (AVC)
                 // or VPS/SPS/PPS (HEVC) before any access unit reaches MediaCodec.
                 if (!decodeGate.canQueueFrame(keyFrame)) return
@@ -376,7 +390,17 @@ class HardwareVideoDecoder(
                 val profile = runCatching { format.getInteger(MediaFormat.KEY_PROFILE) }.getOrDefault(-1)
                 val profileLabel = profileName(mime, profile)
                 decodedCodecLabel = codecDisplayName(mime) + if (profileLabel.isBlank()) "" else " $profileLabel"
-                Log.i(tag, "Decoder output format: $decodedCodecLabel ${decodedWidth}x${decodedHeight} format=$format")
+                val cropLeft = runCatching { format.getInteger("crop-left") }.getOrDefault(0)
+                val cropRight = runCatching { format.getInteger("crop-right") }.getOrDefault(decodedWidth - 1)
+                val cropTop = runCatching { format.getInteger("crop-top") }.getOrDefault(0)
+                val cropBottom = runCatching { format.getInteger("crop-bottom") }.getOrDefault(decodedHeight - 1)
+                val colorFormat = runCatching { format.getInteger(MediaFormat.KEY_COLOR_FORMAT) }.getOrDefault(-1)
+                Log.i(
+                    tag,
+                    "Decoder output format changed: ${decodedWidth}x${decodedHeight} " +
+                        "crop-left=$cropLeft crop-right=$cropRight crop-top=$cropTop crop-bottom=$cropBottom " +
+                        "color-format=$colorFormat mime=$mime profile=$profile"
+                )
                 continue
             }
             if (outputIndex < 0) break
