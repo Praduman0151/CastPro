@@ -7,7 +7,7 @@ class AnnexBCodecConfigTest {
     @Test fun extractsAvcSpsAndPpsWithAnnexBStartCodes() {
         val input = byteArrayOf(
             0, 0, 0, 1, 0x67, 0x42, 0, 0x1E,
-            0, 0, 1, 0x68, 0xCE, 0x06
+            0, 0, 1, 0x68, 0xCE.toByte(), 0x06
         )
         val extracted = AnnexBCodecConfig.extractParameterSets("video/avc", input)
         assertNotNull(extracted)
