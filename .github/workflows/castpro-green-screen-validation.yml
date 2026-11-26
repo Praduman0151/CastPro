@@ -34,3 +34,13 @@ jobs:
 
       - name: Run requested tests and APK builds
         run: ./gradlew :core-common:testDebugUnitTest :core-streaming:testDebugUnitTest :app-phone:assembleDebug :app-tv:assembleDebug
+
+      - name: Upload phone and TV debug APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: castpro-debug-apks-run-${{ github.run_number }}
+          path: |
+            app-phone/build/outputs/apk/debug/app-phone-debug.apk
+            app-tv/build/outputs/apk/debug/app-tv-debug.apk
+          if-no-files-found: error
+          retention-days: 14
