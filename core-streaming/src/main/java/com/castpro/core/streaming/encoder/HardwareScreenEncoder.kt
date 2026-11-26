@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.util.Log
 import android.view.Surface
 import com.castpro.core.common.model.StreamConfig
+import com.castpro.core.common.protocol.AnnexBCodecConfig
 import com.castpro.core.common.protocol.Constants
 import com.castpro.core.common.protocol.PacketHeader
 import com.castpro.core.streaming.transport.StreamTransport
@@ -55,6 +56,7 @@ class HardwareScreenEncoder(
     private var windowFrames = 0
     private var windowBytes = 0L
     private var windowStartMs = System.currentTimeMillis()
+    private var loggedOutputPackets = 0
 
     override fun prepare(): Surface {
         val codec = createConfiguredEncoder()
@@ -117,6 +119,7 @@ class HardwareScreenEncoder(
     override fun start() {
         val codec = mediaCodec ?: throw IllegalStateException("Encoder not prepared")
         codec.start()
+        Log.i(tag, "Encoder codec=${codec.name} mime=${config.codecMime} format=${codec.outputFormat}")
         isRunning.set(true)
         windowStartMs = System.currentTimeMillis()
 
@@ -159,6 +162,17 @@ class HardwareScreenEncoder(
 
                     val payload = ByteArray(bufferInfo.size)
                     encodedData.get(payload)
+
+                    if (loggedOutputPackets < 10) {
+                        loggedOutputPackets++
+                        Log.i(
+                            tag,
+                            "Video packet #$loggedOutputPackets type=${Constants.TYPE_VIDEO_NAL} " +
+                                "flags=$flags bytes=${payload.size} first16=${AnnexBCodecConfig.hexPrefix(payload)} " +
+                                "annexBNalTypes=${AnnexBCodecConfig.nalUnitTypes(config.codecMime, payload)} " +
+                                "codec=${codec.name}"
+                        )
+                    }
 
                     // A receiver must have SPS/PPS (or VPS/SPS/PPS) before an
                     // IDR. The first connection can race the encoder's
@@ -243,8 +257,23 @@ class HardwareScreenEncoder(
             copy.get(data, offset, length)
             offset += length
         }
-        codecConfigBytes = data
-        Log.i(tag, "Encoder codec config: ${data.size} bytes")
+        val parameterSets = AnnexBCodecConfig.extractParameterSets(config.codecMime, data)
+        if (parameterSets == null) {
+            Log.e(
+                tag,
+                "Rejecting invalid/non-Annex-B codec config for ${config.codecMime}: " +
+                    "bytes=${data.size} first16=${AnnexBCodecConfig.hexPrefix(data)} " +
+                    "nalTypes=${AnnexBCodecConfig.nalUnitTypes(config.codecMime, data)}"
+            )
+            codecConfigBytes = null
+            return
+        }
+        codecConfigBytes = parameterSets
+        Log.i(
+            tag,
+            "Encoder codec config accepted: ${parameterSets.size} bytes " +
+                "nalTypes=${AnnexBCodecConfig.nalUnitTypes(config.codecMime, parameterSets)}"
+        )
         sendCodecConfig()
     }
 
