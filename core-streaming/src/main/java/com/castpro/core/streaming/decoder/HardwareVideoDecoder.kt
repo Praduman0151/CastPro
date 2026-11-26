@@ -185,15 +185,14 @@ class HardwareVideoDecoder(
         synchronized(lock) {
             runCatching { mediaCodec?.flush() }
             // flush() discards codec-specific data on many frameworks.
+            decodeGate.resetForFlush()
             mediaCodec?.let { codec ->
                 cachedCodecConfig?.let { configBytes ->
-                    queueCodecConfig(codec, configBytes, 0, configBytes.size)
-                }
-            }
-            decodeGate.resetForFlush()
-            cachedCodecConfig?.let { bytes ->
-                if (AnnexBCodecConfig.hasRequiredParameterSets(config.codecMime, bytes)) {
-                    decodeGate.markCodecConfigAvailable()
+                    if (AnnexBCodecConfig.hasRequiredParameterSets(config.codecMime, configBytes) &&
+                        queueCodecConfig(codec, configBytes, 0, configBytes.size)
+                    ) {
+                        decodeGate.markCodecConfigAvailable()
+                    }
                 }
             }
             resetMetrics()
