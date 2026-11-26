@@ -9,11 +9,11 @@ class VideoDecodeGate {
         hasCodecConfig = true
     }
 
-    fun shouldQueueFrame(isKeyframe: Boolean): Boolean {
-        if (!hasCodecConfig) return false
-        if (waitingForKeyframe && !isKeyframe) return false
-        if (isKeyframe) waitingForKeyframe = false
-        return true
+    fun canQueueFrame(isKeyframe: Boolean): Boolean =
+        hasCodecConfig && (!waitingForKeyframe || isKeyframe)
+
+    fun markKeyframeQueued() {
+        waitingForKeyframe = false
     }
 
     fun resetForFlush() {
