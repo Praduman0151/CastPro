@@ -116,10 +116,9 @@ class HardwareScreenEncoder(
         // This strips KEY_PROFILE, KEY_LEVEL, KEY_COLOR_STANDARD,
         // KEY_COLOR_TRANSFER and KEY_COLOR_RANGE, plus optional tuning keys.
         val fallbackFormat = MediaFormat.createVideoFormat(config.codecMime, config.width, config.height).apply {
-            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            setInteger(MediaFormat.KEY_BIT_RATE, config.bitrate)
-            setInteger(MediaFormat.KEY_FRAME_RATE, config.fps)
-            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, Constants.DEFAULT_I_FRAME_INTERVAL)
+            EncoderFormatPolicy.minimalFallbackValues(
+                config.bitrate, config.fps, Constants.DEFAULT_I_FRAME_INTERVAL
+            ).forEach { (key, value) -> setInteger(key, value) }
         }
         val fallbackCodec = MediaCodec.createEncoderByType(config.codecMime)
         try {
