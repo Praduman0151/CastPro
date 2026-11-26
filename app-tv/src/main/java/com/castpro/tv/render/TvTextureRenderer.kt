@@ -68,7 +68,7 @@ class TvTextureRenderer(
     override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) {
         renderedFrameUpdates++
         if (renderedFrameUpdates == 1) {
-            Log.i(tag, "First decoded frame reached the TextureView surface")
+            Log.i(tag, "First rendered frame reached TextureView at wallTimeMs=${System.currentTimeMillis()} surface=${surfaceTexture.hashCode()}")
             onFrameRendered()
         }
     }
