@@ -9,18 +9,20 @@ class VideoDecodeGateTest {
         assertFalse(gate.canQueueFrame(isKeyframe = false))
         assertFalse(gate.canQueueFrame(isKeyframe = true))
         gate.markCodecConfigAvailable()
-        assertFalse(gate.shouldQueueFrame(isKeyframe = false))
-        assertTrue(gate.shouldQueueFrame(isKeyframe = true))
-        assertTrue(gate.shouldQueueFrame(isKeyframe = false))
+        assertFalse(gate.canQueueFrame(isKeyframe = false))
+        assertTrue(gate.canQueueFrame(isKeyframe = true))
+        gate.markKeyframeQueued()
+        assertTrue(gate.canQueueFrame(isKeyframe = false))
     }
 
     @Test fun flushRequiresFreshIdrButRetainsKnownConfig() {
         val gate = VideoDecodeGate()
         gate.markCodecConfigAvailable()
-        assertTrue(gate.shouldQueueFrame(isKeyframe = true))
+        assertTrue(gate.canQueueFrame(isKeyframe = true))
+        gate.markKeyframeQueued()
         gate.resetForFlush()
-        assertFalse(gate.shouldQueueFrame(isKeyframe = false))
-        assertTrue(gate.shouldQueueFrame(isKeyframe = true))
+        assertFalse(gate.canQueueFrame(isKeyframe = false))
+        assertTrue(gate.canQueueFrame(isKeyframe = true))
     }
 
     @Test fun reconfigureRequiresNewConfigAndIdr() {
@@ -28,6 +30,6 @@ class VideoDecodeGateTest {
         gate.markCodecConfigAvailable()
         gate.resetForReconfigure()
         assertFalse(gate.hasCodecConfig())
-        assertFalse(gate.shouldQueueFrame(isKeyframe = true))
+        assertFalse(gate.canQueueFrame(isKeyframe = true))
     }
 }
