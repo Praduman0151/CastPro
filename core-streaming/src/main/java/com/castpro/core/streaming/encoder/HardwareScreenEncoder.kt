@@ -72,6 +72,16 @@ class HardwareScreenEncoder(
             setInteger(MediaFormat.KEY_BIT_RATE, config.bitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, config.fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, Constants.DEFAULT_I_FRAME_INTERVAL)
+            if (config.codecMime.equals(MediaFormat.MIMETYPE_VIDEO_AVC, ignoreCase = true)) {
+                // Keep the production AVC path 8-bit SDR and broadly compatible
+                // with Android TV hardware decoders.
+                setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709)
+                setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO)
+                setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
+            }
             // CBR starves fast motion (scrolling, camera pans) because it cannot
             // spend extra bits when a frame gets complex. VBR keeps the same
             // average bitrate but lets the encoder preserve detail on motion.
@@ -104,6 +114,14 @@ class HardwareScreenEncoder(
             setInteger(MediaFormat.KEY_BIT_RATE, config.bitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, config.fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, Constants.DEFAULT_I_FRAME_INTERVAL)
+            if (config.codecMime.equals(MediaFormat.MIMETYPE_VIDEO_AVC, ignoreCase = true)) {
+                setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709)
+                setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO)
+                setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
+            }
         }
         val safeCodec = MediaCodec.createEncoderByType(config.codecMime)
         try {
@@ -119,7 +137,7 @@ class HardwareScreenEncoder(
     override fun start() {
         val codec = mediaCodec ?: throw IllegalStateException("Encoder not prepared")
         codec.start()
-        Log.i(tag, "Encoder codec=${codec.name} mime=${config.codecMime} format=${codec.outputFormat}")
+        Log.i(tag, "Encoder codec=${codec.name} mime=${config.codecMime}")
         isRunning.set(true)
         windowStartMs = System.currentTimeMillis()
 
