@@ -119,8 +119,8 @@ class HardwareVideoDecoder(
                 val capabilities = codec.codecInfo
                     ?.getCapabilitiesForType(config.codecMime)
                     ?.videoCapabilities
-                val width = align(config.width, capabilities?.widthAlignment ?: 1)
-                val height = align(config.height, capabilities?.heightAlignment ?: 1)
+                val width = align(config.width, maxOf(16, capabilities?.widthAlignment ?: 1))
+                val height = align(config.height, maxOf(16, capabilities?.heightAlignment ?: 1))
                 if (capabilities != null && !capabilities.isSizeSupported(width, height)) {
                     throw IllegalStateException("Decoder does not support ${width}x${height}")
                 }
