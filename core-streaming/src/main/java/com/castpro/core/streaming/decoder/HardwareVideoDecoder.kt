@@ -136,7 +136,7 @@ class HardwareVideoDecoder(
                 runCatching { codec.setVideoScalingMode(videoScalingMode) }
                 codec.start()
                 mediaCodec = codec
-                waitingForKeyframe = true
+                decodeGate.resetForFlush()
                 cachedCodecConfig?.let { configBytes ->
                     if (AnnexBCodecConfig.hasRequiredParameterSets(config.codecMime, configBytes) &&
                         queueCodecConfig(codec, configBytes, 0, configBytes.size)
@@ -277,7 +277,7 @@ class HardwareVideoDecoder(
 
                 // An IDR alone is not enough: require validated SPS/PPS (AVC)
                 // or VPS/SPS/PPS (HEVC) before any access unit reaches MediaCodec.
-                if (!decodeGate.shouldQueueFrame(keyFrame)) return
+                if (!decodeGate.canQueueFrame(keyFrame)) return
 
                 // Never block the network thread waiting for an input buffer.
                 // A late frame is worthless in a low-latency cast; dropping it
@@ -315,6 +315,7 @@ class HardwareVideoDecoder(
                 // reporting; feeding it here makes SurfaceFlinger delay frames
                 // and the picture appears to run in slow motion.
                 codec.queueInputBuffer(inputIndex, 0, length, presentationTimeUs, 0)
+                if (keyFrame) decodeGate.markKeyframeQueued()
             } catch (e: Throwable) {
                 Log.e(tag, "Decode error", e)
                 // Once MediaCodec throws, its state is not trustworthy. Stop it
