@@ -35,6 +35,7 @@ class LowLatencySocketServer(
     private val isRunning = AtomicBoolean(false)
     private var serverThread: Thread? = null
     private var loggedVideoPackets = 0
+    @Volatile private var diagnosticCodecMime = "video/avc"
 
     fun start(): Boolean {
         if (!isRunning.compareAndSet(false, true)) return false
@@ -117,7 +118,7 @@ class LowLatencySocketServer(
                             tag,
                             "Video packet #$loggedVideoPackets type=${header.type} flags=0x${flags.toString(16)} " +
                                 "bytes=${payload.size} first16=${AnnexBCodecConfig.hexPrefix(payload)} " +
-                                "annexBNalTypes=${AnnexBCodecConfig.nalUnitTypes("video/avc", payload)} " +
+                                "annexBNalTypes=${AnnexBCodecConfig.nalUnitTypes(diagnosticCodecMime, payload)} " +
                                 "codecConfig=$isCodecConfig keyframe=$isKeyframe"
                         )
                     }
@@ -137,7 +138,10 @@ class LowLatencySocketServer(
                     GeometryPacket.fromByteArray(payload)?.let(onGeometryReceived)
                 }
                 Constants.TYPE_STREAM_CONFIG -> runCatching {
-                    StreamConfigPacket.fromByteArray(payload)?.let(onStreamConfigReceived)
+                    StreamConfigPacket.fromByteArray(payload)?.let { config ->
+                        diagnosticCodecMime = config.codec.mimeType
+                        onStreamConfigReceived(config)
+                    }
                 }
                 Constants.TYPE_HEARTBEAT -> runCatching { onHeartbeatReceived(header.timestampNano) }
                 else -> Log.d(tag, "Ignoring packet type ${header.type}")
