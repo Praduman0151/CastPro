@@ -261,7 +261,8 @@ class HardwareScreenEncoder(
     private fun captureCodecConfig(format: MediaFormat) {
         val chunks = listOfNotNull(
             format.getByteBuffer("csd-0"),
-            format.getByteBuffer("csd-1")
+            format.getByteBuffer("csd-1"),
+            format.getByteBuffer("csd-2")
         )
         if (chunks.isEmpty()) return
         val total = chunks.sumOf { it.remaining() }
