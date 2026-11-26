@@ -382,7 +382,7 @@ class HardwareVideoDecoder(
             }
             if (outputIndex < 0) break
 
-            if (loggedOutputBuffers < 5) {
+            if (loggedOutputBuffers < 10) {
                 loggedOutputBuffers++
                 Log.i(
                     tag,
