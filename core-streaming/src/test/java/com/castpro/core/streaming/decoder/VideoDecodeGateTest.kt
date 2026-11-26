@@ -6,8 +6,8 @@ import org.junit.Test
 class VideoDecodeGateTest {
     @Test fun lateJoinDropsFramesUntilConfigThenIdr() {
         val gate = VideoDecodeGate()
-        assertFalse(gate.shouldQueueFrame(isKeyframe = false))
-        assertFalse(gate.shouldQueueFrame(isKeyframe = true))
+        assertFalse(gate.canQueueFrame(isKeyframe = false))
+        assertFalse(gate.canQueueFrame(isKeyframe = true))
         gate.markCodecConfigAvailable()
         assertFalse(gate.shouldQueueFrame(isKeyframe = false))
         assertTrue(gate.shouldQueueFrame(isKeyframe = true))
