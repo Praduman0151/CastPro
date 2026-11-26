@@ -8,6 +8,7 @@ import android.view.TextureView
 import com.castpro.core.common.model.GeometryPacket
 import com.castpro.core.common.model.LatencyMetrics
 import com.castpro.core.common.model.StreamConfig
+import com.castpro.core.common.protocol.AnnexBCodecConfig
 import com.castpro.core.streaming.decoder.HardwareVideoDecoder
 import com.castpro.tv.viewmodel.TvDisplayMode
 import kotlin.math.max
@@ -37,6 +38,8 @@ class TvTextureRenderer(
     private var displayMode: TvDisplayMode = initialDisplayMode
     private var decoder: HardwareVideoDecoder? = null
     private var outputSurface: Surface? = null
+    // Kept across SurfaceTexture destruction/recreation for this TCP session.
+    private var sessionCodecConfig: ByteArray? = null
     private var renderedFrameUpdates = 0
     var isSurfaceReady = false
         private set
@@ -56,8 +59,16 @@ class TvTextureRenderer(
             initialScalingMode = displayMode.scalingMode,
             onMetricsUpdated = onMetricsUpdated,
             onError = onError,
-            clockOffsetProvider = clockOffsetProvider
+            clockOffsetProvider = clockOffsetProvider,
+            initialCodecConfig = sessionCodecConfig?.copyOf()
         ).apply { start() }
+        if (sessionCodecConfig != null) {
+            Log.i(tag, "Recreated decoder seeded with cached session CSD (${sessionCodecConfig!!.size} bytes)")
+        } else {
+            Log.w(tag, "Surface recreated without cached CSD; waiting for inline parameter sets/IDR")
+        }
+        // The current TCP protocol has no receiver-to-sender keyframe request.
+        // The sender prepends parameter sets to sync frames when supported.
         applyTransform(width, height)
     }
 
@@ -97,6 +108,8 @@ class TvTextureRenderer(
     }
 
     fun onConfig(newConfig: StreamConfig) {
+        // A new StreamConfig starts a new codec session; never reuse stale CSD.
+        sessionCodecConfig = null
         config = newConfig
         textureView.surfaceTexture?.let(::sizeDecoderBuffer)
         decoder?.reconfigure(newConfig)
@@ -112,7 +125,22 @@ class TvTextureRenderer(
         isCodecConfig: Boolean,
         isKeyframe: Boolean
     ) {
+        if (isCodecConfig) {
+            val validated = AnnexBCodecConfig.extractParameterSets(config.codecMime, data, offset, length)
+            if (validated != null) {
+                sessionCodecConfig = validated
+                Log.i(tag, "Cached validated session CSD: ${validated.size} bytes")
+            } else {
+                Log.w(tag, "Ignoring invalid session codec config")
+            }
+        }
         decoder?.decodeFrame(data, offset, length, timestampNano, isGamingMode, isCodecConfig, isKeyframe)
+    }
+
+    /** Must be called by the receiver owner when the TCP client disconnects. */
+    fun onSessionDisconnected() {
+        sessionCodecConfig = null
+        Log.i(tag, "Cleared cached codec config after TCP session disconnect")
     }
 
     fun onGeometry(geometry: GeometryPacket) {
