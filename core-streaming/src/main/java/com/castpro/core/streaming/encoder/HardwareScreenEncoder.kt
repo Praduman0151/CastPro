@@ -224,9 +224,8 @@ class HardwareScreenEncoder(
                     val isKeyframe = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
                     val flags = ((if (isKeyframe) Constants.FLAG_KEYFRAME.toInt() else 0) or
                         (if (config.isGamingMode) Constants.FLAG_GAMING_MODE.toInt() else 0)).toByte()
-                    // Monotonic elapsed-realtime timestamp; never affected by
-                    // wall-clock corrections while a stream is running.
-                    val captureTimeNano = SystemClock.elapsedRealtimeNanos()
+                    // Packet timestamps share the wall-clock domain used by TV heartbeat offset calibration.
+                    // MediaCodec's presentationTimeUs remains monotonic and is not modified here.
 
                     val payload = ByteArray(bufferInfo.size)
                     encodedData.get(payload)
