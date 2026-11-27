@@ -87,6 +87,7 @@ class ScreenCaptureService : Service() {
     // an old session cannot stop the foreground service of a newer session.
     @Volatile private var sessionGeneration = 0
     @Volatile private var currentRotationDegrees: Int = 0
+    @Volatile private var useNativeEncoder: Boolean = false
 
     @Volatile
     private var transportConnected = false
@@ -127,6 +128,8 @@ class ScreenCaptureService : Service() {
         const val EXTRA_ENABLE_WEB_SERVER = "extra_enable_web_server"
         const val EXTRA_WEB_PORT = "extra_web_port"
         const val EXTRA_ENABLE_WAKE_LOCK = "extra_enable_wake_lock"
+        /** Experimental opt-in; absent/false always selects HardwareScreenEncoder. */
+        const val EXTRA_USE_NATIVE_ENCODER = "extra_use_native_encoder"
 
         private const val CHANNEL_ID = "cast_pro_channel"
         private const val NOTIFICATION_ID = 1001
@@ -180,6 +183,7 @@ class ScreenCaptureService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
+                useNativeEncoder = intent.getBooleanExtra(EXTRA_USE_NATIVE_ENCODER, false)
                 val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
                 val resultData = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
@@ -313,6 +317,7 @@ class ScreenCaptureService : Service() {
                         )
                     },
                     onError = { message -> CastSessionBus.setError(message) }
+                useNativeEncoder = useNativeEncoder,
                 )
                 synchronized(pipelineLock) {
                     if (!started.get() || !transportConnected ||
@@ -555,6 +560,7 @@ class ScreenCaptureService : Service() {
                                 )
                             },
                             onError = { message -> CastSessionBus.setError(message) }
+                        useNativeEncoder = useNativeEncoder,
                         )
                         encoder = enc
                         virtualDisplay = project.createVirtualDisplay(
