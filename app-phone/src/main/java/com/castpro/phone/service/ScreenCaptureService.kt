@@ -797,29 +797,41 @@ class ScreenCaptureService : Service() {
         val failedHost = currentHost
         val failedName = currentReceiverName
         Log.i(tag, "Stopping screen casting${failure?.let { ": $it" } ?: ""}")
+        // Every teardown action is isolated: one broken resource must never
+        // prevent the VirtualDisplay, codec, projection, or TCP socket closing.
+        runCatching { sendSessionEnd() }
+            .onFailure { Log.w(tag, "Could not send SESSION_END", it) }
+        runCatching { heartbeatJob?.cancel() }
+            .onFailure { Log.w(tag, "Could not cancel heartbeat", it) }
+        runCatching { webMirror?.stop() }
+            .onFailure { Log.w(tag, "Could not stop web mirror", it) }
+        runCatching { resolutionMonitor?.stop() }
+            .onFailure { Log.w(tag, "Could not stop resolution monitor", it) }
+        runCatching { wakeLock?.release() }
+            .onFailure { Log.w(tag, "Could not release wake lock", it) }
+        runCatching { webServer?.stop() }
+            .onFailure { Log.w(tag, "Could not stop web server", it) }
+        runCatching { audioCapture?.stop() }
+            .onFailure { Log.w(tag, "Could not stop audio capture", it) }
+        // Detach the encoder input surface before releasing the codec.
+        runCatching { virtualDisplay?.release() }
+            .onFailure { Log.w(tag, "Could not release VirtualDisplay", it) }
+        virtualDisplay = null
+        runCatching { encoder?.stop() }
+            .onFailure { Log.w(tag, "Could not stop encoder", it) }
+        runCatching { mediaProjection?.unregisterCallback(projectionCallback) }
+            .onFailure { Log.w(tag, "Could not unregister MediaProjection callback", it) }
+        runCatching { mediaProjection?.stop() }
+            .onFailure { Log.w(tag, "Could not stop MediaProjection", it) }
+        runCatching { transport?.stop() }
+            .onFailure { Log.w(tag, "Could not stop stream transport", it) }
+        runCatching {
+            startService(Intent(this, InGameOverlayService::class.java).apply {
+                action = InGameOverlayService.ACTION_HIDE
+            })
+        }.onFailure { Log.w(tag, "Could not hide in-game overlay", it) }
+
         try {
-            // Notify the receiver before closing the writable TCP channel.
-            sendSessionEnd()
-            heartbeatJob?.cancel()
-            webMirror?.stop()
-            resolutionMonitor?.stop()
-            wakeLock?.release()
-            webServer?.stop()
-            audioCapture?.stop()
-            // Detach the encoder input surface before releasing the codec.
-            virtualDisplay?.release()
-            virtualDisplay = null
-            encoder?.stop()
-            runCatching { mediaProjection?.unregisterCallback(projectionCallback) }
-            mediaProjection?.stop()
-            transport?.stop()
-            runCatching {
-                startService(Intent(this, InGameOverlayService::class.java).apply {
-                    action = InGameOverlayService.ACTION_HIDE
-                })
-            }
-        } catch (e: Exception) {
-            Log.e(tag, "Error stopping stream", e)
         } finally {
             // Always return the panel to the user's previous brightness after a cast.
             runCatching { screenDimController.restore() }
