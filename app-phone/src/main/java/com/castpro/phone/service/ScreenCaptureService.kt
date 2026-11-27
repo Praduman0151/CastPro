@@ -230,7 +230,9 @@ class ScreenCaptureService : Service() {
                 )
             }
             ACTION_UPDATE_CONFIG -> {
-                useNativeEncoder = intent.getBooleanExtra(EXTRA_USE_NATIVE_ENCODER, useNativeEncoder)
+                val requestedNativeEncoder = intent.getBooleanExtra(EXTRA_USE_NATIVE_ENCODER, useNativeEncoder)
+                val encoderBackendChanged = requestedNativeEncoder != useNativeEncoder
+                useNativeEncoder = requestedNativeEncoder
                 // Apply quality changes to the live session. Recreating the
                 // projection would require the consent dialog again, so keep
                 // MediaProjection and only swap the virtual display + encoder.
@@ -241,7 +243,8 @@ class ScreenCaptureService : Service() {
                     bitrate = intent.getIntExtra(EXTRA_BITRATE, 12_000_000),
                     fps = intent.getIntExtra(EXTRA_FPS, 60),
                     codec = intent.getStringExtra(EXTRA_CODEC) ?: "video/avc",
-                    isGamingMode = intent.getBooleanExtra(EXTRA_GAMING_MODE, true)
+                    isGamingMode = intent.getBooleanExtra(EXTRA_GAMING_MODE, true),
+                    forceRecreate = encoderBackendChanged
                 )
             }
             ACTION_STOP -> stopStreaming()
