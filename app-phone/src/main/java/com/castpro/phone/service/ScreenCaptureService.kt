@@ -355,7 +355,9 @@ class ScreenCaptureService : Service() {
                     isGamingMode = isGamingMode
                 )
                 var previousEncoder: ScreenEncoderBackend? = null
-                val installed = pipelineGate.installOrRelease(
+                var ownershipTransferred = false
+                val installed = try {
+                    pipelineGate.installOrRelease(
                     expectedGeneration = expectedGeneration,
                     currentGeneration = { sessionGeneration.get() },
                     isStarted = { started.get() },
@@ -367,8 +369,6 @@ class ScreenCaptureService : Service() {
                     },
                     install = {
                     if (!transportConnected || mediaProjection !== project || transport !== tcp) {
-                        runCatching { enc.stop() }
-                        runCatching { inputSurface.release() }
                         throw IllegalStateException("Session resources changed while applying quality")
                     }
                     // Do NOT create a second VirtualDisplay from the same
@@ -377,6 +377,7 @@ class ScreenCaptureService : Service() {
                     val oldDisplay = virtualDisplay
                     previousEncoder = encoder
                     encoder = enc
+                    ownershipTransferred = true
                     lastVideoFramesSent.set(0)
                     lastVideoProgressAtMs.set(System.nanoTime() / 1_000_000L)
                     stallRecoveryRequested.set(false)
@@ -414,7 +415,17 @@ class ScreenCaptureService : Service() {
                         "${outputWidth}x${outputHeight} · ${fps} fps · ${codec.substringAfterLast('/').uppercase()}"
                     )
                     }
-                )
+                    )
+                } catch (installError: Exception) {
+                    // This catch runs after PipelineReplacementGate releases pipelineLock.
+                    if (!ownershipTransferred) {
+                        runCatching { enc.stop() }
+                        runCatching { inputSurface.release() }
+                    } else {
+                        previousEncoder?.let { runCatching { it.stop() } }
+                    }
+                    throw installError
+                }
                 if (!installed) {
                     Log.i(tag, "Discarded prepared encoder because session generation changed")
                     return@synchronized
