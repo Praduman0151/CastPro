@@ -11,6 +11,7 @@ import android.view.OrientationEventListener
 import android.view.Surface
 import android.view.WindowManager
 import com.castpro.core.common.model.GeometryPacket
+import com.castpro.core.streaming.lifecycle.OrientationReconfigurationPolicy
 
 class ScreenResolutionMonitor(
     private val context: Context,
@@ -19,7 +20,7 @@ class ScreenResolutionMonitor(
     private val tag = "ScreenResolutionMonitor"
 
     companion object {
-        const val ORIENTATION_DEBOUNCE_MS = 250L
+        const val ORIENTATION_DEBOUNCE_MS = OrientationReconfigurationPolicy.DEBOUNCE_MS
     }
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val displayManager = context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
