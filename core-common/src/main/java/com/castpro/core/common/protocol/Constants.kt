@@ -15,6 +15,8 @@ object Constants {
     const val TYPE_GEOMETRY: Byte = 0x05
     const val TYPE_STREAM_CONFIG: Byte = 0x06
     const val TYPE_VIDEO_JPEG: Byte = 0x07
+    /** Sender is intentionally ending the current TCP cast session. */
+    const val TYPE_SESSION_END: Byte = 0x08
 
     /** A corrupt or hostile peer must never make the receiver allocate gigabytes. */
     const val MAX_PAYLOAD_SIZE = 32 * 1024 * 1024

@@ -146,6 +146,7 @@ class TvTextureRenderer(
         isCodecConfig: Boolean,
         isKeyframe: Boolean
     ) {
+        if (length > 0) textureView.visibility = android.view.View.VISIBLE
         if (isCodecConfig) {
             val validated = AnnexBCodecConfig.extractParameterSets(config.codecMime, data, offset, length)
             if (validated != null) {
@@ -161,7 +162,10 @@ class TvTextureRenderer(
     /** Must be called by the receiver owner when the TCP client disconnects. */
     fun onSessionDisconnected() {
         sessionCodecConfig = null
-        Log.i(tag, "Cleared cached codec config after TCP session disconnect")
+        decoder?.resetSession()
+        decoder?.stop()
+        textureView.visibility = android.view.View.INVISIBLE
+        Log.i(tag, "SESSION_DISCONNECTED: cleared CSD, closed decode gate, stopped decoder and hid stale frame")
     }
 
     fun onGeometry(geometry: GeometryPacket) {

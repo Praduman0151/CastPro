@@ -30,6 +30,9 @@ class VideoDecodeGate {
         waitingForKeyframe = true
     }
 
+    /** A new TCP peer must supply fresh parameter sets and an IDR. */
+    fun resetForSession() = resetForReconfigure()
+
     fun resetForReconfigure() {
         hasCodecConfig = false
         waitingForKeyframe = true

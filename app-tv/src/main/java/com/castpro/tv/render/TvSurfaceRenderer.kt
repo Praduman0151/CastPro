@@ -115,6 +115,7 @@ class TvSurfaceRenderer(
         isKeyframe: Boolean
     ) {
         if (released) return
+        if (length > 0) surfaceView.visibility = android.view.View.VISIBLE
         if (isCodecConfig) {
             val validated = AnnexBCodecConfig.extractParameterSets(config.codecMime, data, offset, length)
             if (validated != null) {
@@ -134,7 +135,16 @@ class TvSurfaceRenderer(
         sessionCodecConfig = null
         reportedFirstFrame = false
         decoder?.resetSession()
-        Log.d(tag, "SURFACE_VIEW cleared session CSD and reset decoder gate")
+        decoder?.stop()
+        surfaceView.visibility = android.view.View.INVISIBLE
+        runCatching {
+            val canvas = surfaceView.holder.lockCanvas()
+            if (canvas != null) {
+                canvas.drawColor(android.graphics.Color.BLACK)
+                surfaceView.holder.unlockCanvasAndPost(canvas)
+            }
+        }.onFailure { Log.w(tag, "Could not clear disconnected SurfaceView", it) }
+        Log.i(tag, "SESSION_DISCONNECTED: cleared CSD, closed decode gate, released decoder and hid stale frame")
     }
 
     fun onGeometry(geometry: GeometryPacket) {

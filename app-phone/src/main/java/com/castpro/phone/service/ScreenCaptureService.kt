@@ -778,6 +778,19 @@ class ScreenCaptureService : Service() {
         web.broadcastPacket(header, jpeg)
     }
 
+    private fun sendSessionEnd(target: StreamTransport? = transport) {
+        val active = target ?: return
+        val header = PacketHeader(
+            type = Constants.TYPE_SESSION_END,
+            flags = 0,
+            sequenceNumber = 0,
+            timestampNano = System.currentTimeMillis() * 1_000_000L,
+            payloadLength = 0
+        )
+        val sent = runCatching { active.send(header, ByteArray(0)) }.getOrDefault(false)
+        Log.i(tag, "SESSION_END sent=$sent")
+    }
+
     private fun stopStreaming(failure: String? = null) {
         if (!stopping.compareAndSet(false, true)) return
         val generation = ++sessionGeneration
@@ -785,13 +798,18 @@ class ScreenCaptureService : Service() {
         val failedName = currentReceiverName
         Log.i(tag, "Stopping screen casting${failure?.let { ": $it" } ?: ""}")
         try {
+            // Notify the receiver before closing the writable TCP channel.
+            sendSessionEnd()
+            heartbeatJob?.cancel()
             webMirror?.stop()
             resolutionMonitor?.stop()
             wakeLock?.release()
             webServer?.stop()
             audioCapture?.stop()
-            encoder?.stop()
+            // Detach the encoder input surface before releasing the codec.
             virtualDisplay?.release()
+            virtualDisplay = null
+            encoder?.stop()
             runCatching { mediaProjection?.unregisterCallback(projectionCallback) }
             mediaProjection?.stop()
             transport?.stop()

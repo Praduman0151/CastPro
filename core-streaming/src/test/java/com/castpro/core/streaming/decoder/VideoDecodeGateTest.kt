@@ -60,4 +60,23 @@ class VideoDecodeGateTest {
         assertTrue(gateForRecreatedDecoder.canQueueFrame(isKeyframe = true))
     }
 
+    @Test fun disconnectClosesGateAndReconnectRequiresFreshConfigAndIdr() {
+        val gate = VideoDecodeGate()
+        gate.markCodecConfigAvailable()
+        assertTrue(gate.canQueueFrame(isKeyframe = true))
+        gate.markKeyframeQueued()
+        assertTrue(gate.canQueueFrame(isKeyframe = false))
+
+        gate.resetForSession()
+        assertFalse(gate.hasCodecConfig())
+        assertFalse(gate.canQueueFrame(isKeyframe = true))
+        assertFalse(gate.canQueueFrame(isKeyframe = false))
+
+        gate.markCodecConfigAvailable()
+        assertFalse(gate.canQueueFrame(isKeyframe = false))
+        assertTrue(gate.canQueueFrame(isKeyframe = true))
+        gate.markKeyframeQueued()
+        assertTrue(gate.canQueueFrame(isKeyframe = false))
+    }
+
 }

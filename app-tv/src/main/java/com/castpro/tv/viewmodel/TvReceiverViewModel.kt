@@ -256,6 +256,9 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
                 _uiState.update {
                     it.copy(
                         isClientConnected = true,
+                        metrics = com.castpro.core.common.model.LatencyMetrics(),
+                        videoWidth = 0,
+                        videoHeight = 0,
                         // Do not show the player until real video arrives. A TCP
                         // accept alone used to mark the receiver "Streaming".
                         isStreaming = false,
@@ -273,6 +276,9 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
                         isStreaming = false,
                         isClientConnected = false,
                         clientIp = null,
+                        metrics = com.castpro.core.common.model.LatencyMetrics(),
+                        videoWidth = 0,
+                        videoHeight = 0,
                         connectionStatus = if (it.isServerRunning) "Waiting for phone" else "Receiver offline"
                     )
                 }

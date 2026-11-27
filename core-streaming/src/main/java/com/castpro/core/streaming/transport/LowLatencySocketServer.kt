@@ -64,6 +64,9 @@ class LowLatencySocketServer(
                     val client = serverSocket?.accept() ?: break
                     client.tcpNoDelay = true
                     client.receiveBufferSize = 64 * 1024
+                    // Heartbeats arrive once per second; five seconds without any packet
+                    // means the sender disappeared even if the TCP FIN was never observed.
+                    client.soTimeout = 5_000
                     clientSocket = client
                     val clientIp = client.inetAddress.hostAddress ?: "Unknown"
                     Log.i(tag, "Client connected: $clientIp")
@@ -144,6 +147,10 @@ class LowLatencySocketServer(
                     }
                 }
                 Constants.TYPE_HEARTBEAT -> runCatching { onHeartbeatReceived(header.timestampNano) }
+                Constants.TYPE_SESSION_END -> {
+                    Log.i(tag, "Sender ended the cast session cleanly")
+                    return
+                }
                 else -> Log.d(tag, "Ignoring packet type ${header.type}")
             }
         }
