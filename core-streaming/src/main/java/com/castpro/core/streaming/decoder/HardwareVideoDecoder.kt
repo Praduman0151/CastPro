@@ -28,7 +28,7 @@ class HardwareVideoDecoder(
     initialCodecConfig: ByteArray? = null,
     /** Diagnostic-only codec override; null preserves platform hardware-first selection. */
     private val diagnosticDecoderName: String? = null
-) {
+) : VideoDecoderController {
     private val tag = "HardwareVideoDecoder"
     private val lock = Any()
     @Volatile private var config: StreamConfig = initialConfig
@@ -57,12 +57,12 @@ class HardwareVideoDecoder(
     @Volatile private var decodedCodecLabel: String = codecDisplayName(config.codecMime)
     @Volatile private var videoScalingMode: Int = initialScalingMode
 
-    fun start() {
+    override fun start() {
         synchronized(lock) { startCodec() }
     }
 
     /** Called by the TV when the user changes display mode during a cast. */
-    fun setVideoScalingMode(mode: Int) {
+    override fun setVideoScalingMode(mode: Int) {
         if (videoScalingMode == mode) return
         videoScalingMode = mode
         synchronized(lock) {
@@ -81,7 +81,7 @@ class HardwareVideoDecoder(
      * A new TCP session must not inherit the previous peer's codec-config or
      * keyframe gate, even when the resolution and MIME type are unchanged.
      */
-    fun resetSession() {
+    override fun resetSession() {
         synchronized(lock) {
             cachedCodecConfig = null
             lastSubmittedCsd = null
@@ -91,7 +91,7 @@ class HardwareVideoDecoder(
         }
     }
 
-    fun reconfigure(newConfig: StreamConfig) {
+    override fun reconfigure(newConfig: StreamConfig) {
         synchronized(lock) {
             if (newConfig.codecMime == config.codecMime &&
                 newConfig.width == config.width &&
@@ -219,7 +219,7 @@ class HardwareVideoDecoder(
         return ceil(value.toFloat() / alignment).toInt() * alignment
     }
 
-    fun reset() {
+    override fun reset() {
         synchronized(lock) {
             runCatching { mediaCodec?.flush() }
             // flush() discards codec-specific data on many frameworks.
@@ -273,7 +273,7 @@ class HardwareVideoDecoder(
         return true
     }
 
-    fun decodeFrame(
+    override fun decodeFrame(
         data: ByteArray,
         offset: Int,
         length: Int,
@@ -623,7 +623,7 @@ class HardwareVideoDecoder(
         }
     }
 
-    fun stop() {
+    override fun stop() {
         synchronized(lock) { stopCodec() }
     }
 
