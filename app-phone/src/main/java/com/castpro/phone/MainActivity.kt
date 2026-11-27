@@ -371,6 +371,7 @@ class MainActivity : ComponentActivity() {
             putExtra(ScreenCaptureService.EXTRA_ENABLE_WEB_SERVER, state.settings.enableWebServer)
             putExtra(ScreenCaptureService.EXTRA_WEB_PORT, state.settings.webPort)
             putExtra(ScreenCaptureService.EXTRA_ENABLE_WAKE_LOCK, state.settings.enableKeepAwake)
+            putExtra(ScreenCaptureService.EXTRA_USE_NATIVE_ENCODER, state.settings.useNativeEncoder)
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

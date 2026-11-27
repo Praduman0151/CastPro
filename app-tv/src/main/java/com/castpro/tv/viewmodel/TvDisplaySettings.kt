@@ -12,8 +12,7 @@ import androidx.compose.ui.graphics.Color
  * even when the phone's frame and the TV panel have different shapes. The
  * decoder itself is kept in SCALE_TO_FIT so it never crops before that matrix.
  *
- * FIT and FILL use a uniform scale: FIT keeps the whole frame (bars allowed),
- * FILL crops the overflow. None of these modes change the capture resolution.
+ * FIT keeps the whole frame with bars; FULL and STRETCH fill the panel without cropping. None of these modes change the capture resolution.
  */
 enum class TvDisplayMode(
     val label: String,
@@ -31,9 +30,9 @@ enum class TvDisplayMode(
         "Whole frame, black bars kept"
     ),
     FILL(
-        "Fill",
-        MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING,
-        "Fill the TV, crop the edges"
+        "Full",
+        MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT,
+        "Full TV screen, entire frame visible (stretched, no crop)"
     )
 }
 

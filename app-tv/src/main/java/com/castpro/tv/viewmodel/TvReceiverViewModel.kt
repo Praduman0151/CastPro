@@ -36,6 +36,9 @@ data class TvUiState(
     val pairingUri: String = "",
     val qrCodeBitmap: Bitmap? = null,
     val streamConfig: StreamConfig = StreamConfig(),
+    /** Effective dimensions reported by MediaCodec after applying crop metadata. */
+    val videoWidth: Int = 0,
+    val videoHeight: Int = 0,
     val aspectRatio: Float = 16f / 9f,
     val metrics: LatencyMetrics = LatencyMetrics(),
     /** TCP is connected, but video may not have arrived yet. */
@@ -95,6 +98,7 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
     private var onFrame: ((ByteArray, Int, Int, Long, Boolean, Boolean, Boolean) -> Unit)? = null
     private var onAudio: ((ByteArray, Int, Int) -> Unit)? = null
     private var onGeometry: ((GeometryPacket) -> Unit)? = null
+    private var onSessionDisconnected: (() -> Unit)? = null
 
     init {
         _uiState.update {
@@ -193,12 +197,14 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
         onStreamConfig: (StreamConfigPacket) -> Unit,
         onFrameReceived: (ByteArray, Int, Int, Long, Boolean, Boolean, Boolean) -> Unit,
         onAudioReceived: (ByteArray, Int, Int) -> Unit = { _, _, _ -> },
-        onGeometryReceived: (GeometryPacket) -> Unit = {}
+        onGeometryReceived: (GeometryPacket) -> Unit = {},
+        onSessionDisconnected: () -> Unit = {}
     ) {
         this.onStreamConfig = onStreamConfig
         this.onFrame = onFrameReceived
         this.onAudio = onAudioReceived
         this.onGeometry = onGeometryReceived
+        this.onSessionDisconnected = onSessionDisconnected
         if (socketServer != null) return
         createServer()
     }
@@ -209,6 +215,7 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
         retryJob = null
         socketServer?.stop()
         socketServer = null
+        onSessionDisconnected?.invoke()
         _uiState.update {
             it.copy(
                 connectionError = null,
@@ -249,6 +256,9 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
                 _uiState.update {
                     it.copy(
                         isClientConnected = true,
+                        metrics = com.castpro.core.common.model.LatencyMetrics(),
+                        videoWidth = 0,
+                        videoHeight = 0,
                         // Do not show the player until real video arrives. A TCP
                         // accept alone used to mark the receiver "Streaming".
                         isStreaming = false,
@@ -259,11 +269,16 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
                 }
             },
             onClientDisconnected = {
+                // Clear receiver-side codec configuration on every TCP session end.
+                onSessionDisconnected?.invoke()
                 _uiState.update {
                     it.copy(
                         isStreaming = false,
                         isClientConnected = false,
                         clientIp = null,
+                        metrics = com.castpro.core.common.model.LatencyMetrics(),
+                        videoWidth = 0,
+                        videoHeight = 0,
                         connectionStatus = if (it.isServerRunning) "Waiting for phone" else "Receiver offline"
                     )
                 }
@@ -316,6 +331,8 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
         _uiState.update {
             it.copy(
                 streamConfig = config,
+                videoWidth = packet.width,
+                videoHeight = packet.height,
                 aspectRatio = if (packet.height > 0) packet.width.toFloat() / packet.height else 16f / 9f,
                 connectionError = null
             )
@@ -325,6 +342,12 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
 
     fun updateMetrics(metrics: LatencyMetrics) {
         _uiState.update { it.copy(metrics = metrics) }
+    }
+
+    /** Publish the effective decoded frame size, including codec crop metadata. */
+    fun updateVideoSize(width: Int, height: Int) {
+        if (width <= 0 || height <= 0) return
+        _uiState.update { it.copy(videoWidth = width, videoHeight = height) }
     }
 
     /**
@@ -402,6 +425,8 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
         retryJob?.cancel()
         socketServer?.stop()
         socketServer = null
+        onSessionDisconnected?.invoke()
+        onSessionDisconnected = null
         nsdHelper.stop()
         udpResponder.stop()
         connectivityManager?.let { manager ->

@@ -1,6 +1,7 @@
 package com.castpro.tv.render
 
 import android.graphics.Matrix
+import android.media.MediaCodec
 import android.graphics.SurfaceTexture
 import android.util.Log
 import android.view.Surface
@@ -8,9 +9,10 @@ import android.view.TextureView
 import com.castpro.core.common.model.GeometryPacket
 import com.castpro.core.common.model.LatencyMetrics
 import com.castpro.core.common.model.StreamConfig
+import com.castpro.core.common.protocol.AnnexBCodecConfig
 import com.castpro.core.streaming.decoder.HardwareVideoDecoder
+import com.castpro.core.streaming.decoder.VideoDecoderController
 import com.castpro.tv.viewmodel.TvDisplayMode
-import kotlin.math.max
 import kotlin.math.min
 
 /**
@@ -20,7 +22,7 @@ import kotlin.math.min
  * and SCALE_TO_FIT_WITH_CROPPING crops. For STRETCH we therefore give the
  * decoder a SurfaceTexture sized to the encoded frame (no decoder scaling),
  * then map that whole texture to the whole view with independent X/Y scales.
- * FIT and FILL use a uniform scale inside the same full-window view.
+ * FIT uses a uniform aspect-preserving scale; FULL/STRETCH fill without crop.
  */
 class TvTextureRenderer(
     private val textureView: TextureView,
@@ -29,14 +31,21 @@ class TvTextureRenderer(
     private val onMetricsUpdated: (LatencyMetrics) -> Unit,
     private val onError: (String) -> Unit = {},
     private val clockOffsetProvider: () -> Long? = { null },
-    private val onFrameRendered: () -> Unit = {}
+    private val onFrameRendered: () -> Unit = {},
+    private val onVideoSizeChanged: (Int, Int) -> Unit = { _, _ -> },
+    private val forceSoftwareAvc: Boolean = false,
+    private val decoderFactory: ((StreamConfig, Surface, ByteArray?) -> VideoDecoderController)? = null
 ) : TextureView.SurfaceTextureListener {
 
     private val tag = "TvTextureRenderer"
     private var config: StreamConfig = initialConfig
+    private var decodedWidth: Int = initialConfig.width
+    private var decodedHeight: Int = initialConfig.height
     private var displayMode: TvDisplayMode = initialDisplayMode
-    private var decoder: HardwareVideoDecoder? = null
+    private var decoder: VideoDecoderController? = null
     private var outputSurface: Surface? = null
+    // Kept across SurfaceTexture destruction/recreation for this TCP session.
+    private var sessionCodecConfig: ByteArray? = null
     private var renderedFrameUpdates = 0
     var isSurfaceReady = false
         private set
@@ -50,16 +59,39 @@ class TvTextureRenderer(
         sizeDecoderBuffer(surfaceTexture)
         val surface = Surface(surfaceTexture)
         outputSurface = surface
-        decoder = HardwareVideoDecoder(
-            initialConfig = config,
-            surface = surface,
-            initialScalingMode = displayMode.scalingMode,
-            onMetricsUpdated = onMetricsUpdated,
-            onError = onError,
-            clockOffsetProvider = clockOffsetProvider
-        ).apply { start() }
+        Log.d(tag, "TEXTURE_SURFACE created width=$width height=$height valid=${surface.isValid} texture=${surfaceTexture.hashCode()}")
+        createDecoder(surface).apply { start() }.also { decoder = it }
+        if (sessionCodecConfig != null) {
+            Log.i(tag, "Recreated decoder seeded with cached session CSD (${sessionCodecConfig!!.size} bytes)")
+        } else {
+            Log.w(tag, "Surface recreated without cached CSD; waiting for inline parameter sets/IDR")
+        }
+        // The current TCP protocol has no receiver-to-sender keyframe request.
+        // The sender prepends parameter sets to sync frames when supported.
         applyTransform(width, height)
     }
+
+    private fun createDecoder(surface: Surface): VideoDecoderController =
+        decoderFactory?.invoke(config, surface, sessionCodecConfig?.copyOf()) ?: HardwareVideoDecoder(
+            initialConfig = config,
+            surface = surface,
+            initialScalingMode = MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT,
+            onMetricsUpdated = onMetricsUpdated,
+            onVideoSizeChanged = { width, height ->
+                if (width > 0 && height > 0) {
+                    textureView.post {
+                        decodedWidth = width
+                        decodedHeight = height
+                        applyTransform()
+                        onVideoSizeChanged(width, height)
+                    }
+                }
+            },
+            onError = onError,
+            clockOffsetProvider = clockOffsetProvider,
+            initialCodecConfig = sessionCodecConfig?.copyOf(),
+            diagnosticDecoderName = if (forceSoftwareAvc) "c2.android.avc.decoder" else null
+        )
 
     override fun onSurfaceTextureSizeChanged(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
         applyTransform(width, height)
@@ -67,8 +99,11 @@ class TvTextureRenderer(
 
     override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) {
         renderedFrameUpdates++
+        if (renderedFrameUpdates <= 5) {
+            Log.d(tag, "TEXTURE_SURFACE updated count=$renderedFrameUpdates timestampNs=${surfaceTexture.timestamp} texture=${surfaceTexture.hashCode()}")
+        }
         if (renderedFrameUpdates == 1) {
-            Log.i(tag, "First decoded frame reached the TextureView surface")
+            Log.i(tag, "First rendered frame reached TextureView at wallTimeMs=${System.currentTimeMillis()} surface=${surfaceTexture.hashCode()}")
             onFrameRendered()
         }
     }
@@ -92,12 +127,16 @@ class TvTextureRenderer(
 
     fun setDisplayMode(mode: TvDisplayMode) {
         displayMode = mode
-        decoder?.setVideoScalingMode(mode.scalingMode)
+        decoder?.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT)
         applyTransform()
     }
 
     fun onConfig(newConfig: StreamConfig) {
+        // A new StreamConfig starts a new codec session; never reuse stale CSD.
+        sessionCodecConfig = null
         config = newConfig
+        decodedWidth = newConfig.width
+        decodedHeight = newConfig.height
         textureView.surfaceTexture?.let(::sizeDecoderBuffer)
         decoder?.reconfigure(newConfig)
         applyTransform()
@@ -112,7 +151,26 @@ class TvTextureRenderer(
         isCodecConfig: Boolean,
         isKeyframe: Boolean
     ) {
+        if (length > 0) textureView.visibility = android.view.View.VISIBLE
+        if (isCodecConfig) {
+            val validated = AnnexBCodecConfig.extractParameterSets(config.codecMime, data, offset, length)
+            if (validated != null) {
+                sessionCodecConfig = validated
+                Log.i(tag, "Cached validated session CSD: ${validated.size} bytes")
+            } else {
+                Log.w(tag, "Ignoring invalid session codec config")
+            }
+        }
         decoder?.decodeFrame(data, offset, length, timestampNano, isGamingMode, isCodecConfig, isKeyframe)
+    }
+
+    /** Must be called by the receiver owner when the TCP client disconnects. */
+    fun onSessionDisconnected() {
+        sessionCodecConfig = null
+        decoder?.resetSession()
+        decoder?.stop()
+        textureView.visibility = android.view.View.INVISIBLE
+        Log.i(tag, "SESSION_DISCONNECTED: cleared CSD, closed decode gate, stopped decoder and hid stale frame")
     }
 
     fun onGeometry(geometry: GeometryPacket) {
@@ -136,8 +194,8 @@ class TvTextureRenderer(
 
     private fun applyTransform(viewWidth: Int = textureView.width, viewHeight: Int = textureView.height) {
         if (viewWidth <= 0 || viewHeight <= 0) return
-        val videoWidth = config.width.coerceAtLeast(1).toFloat()
-        val videoHeight = config.height.coerceAtLeast(1).toFloat()
+        val videoWidth = decodedWidth.coerceAtLeast(1).toFloat()
+        val videoHeight = decodedHeight.coerceAtLeast(1).toFloat()
 
         val scaleX: Float
         val scaleY: Float
@@ -145,7 +203,7 @@ class TvTextureRenderer(
         val translateY: Float
 
         when (displayMode) {
-            TvDisplayMode.STRETCH -> {
+            TvDisplayMode.STRETCH, TvDisplayMode.FILL -> {
                 // Independent axes: every decoded pixel maps to the full panel.
                 // No crop, no letterbox, centred by construction.
                 scaleX = viewWidth / videoWidth
@@ -155,13 +213,6 @@ class TvTextureRenderer(
             }
             TvDisplayMode.FIT -> {
                 val scale = min(viewWidth / videoWidth, viewHeight / videoHeight)
-                scaleX = scale
-                scaleY = scale
-                translateX = (viewWidth - videoWidth * scale) / 2f
-                translateY = (viewHeight - videoHeight * scale) / 2f
-            }
-            TvDisplayMode.FILL -> {
-                val scale = max(viewWidth / videoWidth, viewHeight / videoHeight)
                 scaleX = scale
                 scaleY = scale
                 translateX = (viewWidth - videoWidth * scale) / 2f

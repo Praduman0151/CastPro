@@ -1,13 +1,18 @@
 package com.castpro.tv.ui.screens
 
 import android.view.TextureView
+import android.view.SurfaceView
 import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.view.Gravity
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Tv
@@ -34,6 +39,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.castpro.core.common.protocol.Constants
 import com.castpro.tv.ui.components.TvGamerHudOverlay
+import com.castpro.tv.ui.components.TvFocusableButton
 import com.castpro.tv.ui.components.TvNeonBlue
 import com.castpro.tv.ui.components.TvNeonGreen
 import com.castpro.tv.ui.components.TvWarning
@@ -45,6 +51,8 @@ import com.castpro.tv.viewmodel.TvUiState
 fun TvReceiverScreen(
     state: TvUiState,
     onSurfaceCreated: (TextureView) -> Unit,
+    useSurfaceView: Boolean = false,
+    onSurfaceViewCreated: (SurfaceView) -> Unit = {},
     onDismissCrash: () -> Unit = {},
     onDisplayModeChanged: (TvDisplayMode) -> Unit = {},
     onColorFilterChanged: (TvColorFilter) -> Unit = {},
@@ -54,27 +62,66 @@ fun TvReceiverScreen(
     onToggleCompactHud: () -> Unit = {},
     onResetServer: () -> Unit = {}
 ) {
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(Color.Black)
+            .clipToBounds(),
         contentAlignment = Alignment.Center
     ) {
-        // The view is always the full panel. The renderer applies the selected
-        // transform matrix to the decoded frame; STRETCH uses separate X/Y
-        // scales, so the picture can never leave unused black bars.
-        AndroidView(
-            factory = { context ->
-                TextureView(context).apply {
-                    layoutParams = ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT
-                    )
-                    onSurfaceCreated(this)
-                }
-            },
-            modifier = Modifier.fillMaxSize()
+        val density = LocalDensity.current
+        val containerW = constraints.maxWidth.toFloat()
+        val containerH = constraints.maxHeight.toFloat()
+        val videoWidth = state.videoWidth.takeIf { it > 0 } ?: state.streamConfig.width
+        val videoHeight = state.videoHeight.takeIf { it > 0 } ?: state.streamConfig.height
+        val videoAspect = if (videoWidth > 0 && videoHeight > 0) videoWidth.toFloat() / videoHeight.toFloat() else 16f / 9f
+        val containerAspect = if (containerH > 0f) containerW / containerH else 16f / 9f
+        val (targetW, targetH) = when (state.displayMode) {
+            TvDisplayMode.FIT -> if (videoAspect > containerAspect) containerW to (containerW / videoAspect) else (containerH * videoAspect) to containerH
+            TvDisplayMode.FILL -> containerW to containerH
+            TvDisplayMode.STRETCH -> containerW to containerH
+        }
+        val videoModifier = Modifier.requiredSize(
+            with(density) { targetW.toDp() },
+            with(density) { targetH.toDp() }
         )
+        if (useSurfaceView) {
+            AndroidView(
+                factory = { context ->
+                    SurfaceView(context).apply {
+                        val w = targetW.toInt().coerceAtLeast(1)
+                        val h = targetH.toInt().coerceAtLeast(1)
+                        layoutParams = FrameLayout.LayoutParams(w, h, Gravity.CENTER)
+                        onSurfaceViewCreated(this)
+                    }
+                },
+                update = { view ->
+                    val w = targetW.toInt().coerceAtLeast(1)
+                    val h = targetH.toInt().coerceAtLeast(1)
+                    val lp = (view.layoutParams as? FrameLayout.LayoutParams)
+                        ?: FrameLayout.LayoutParams(w, h, Gravity.CENTER)
+                    lp.width = w
+                    lp.height = h
+                    lp.gravity = Gravity.CENTER
+                    view.layoutParams = lp
+                    view.requestLayout()
+                },
+                modifier = videoModifier
+            )
+        } else {
+            AndroidView(
+                factory = { context ->
+                    TextureView(context).apply {
+                        layoutParams = ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT
+                        )
+                        onSurfaceCreated(this)
+                    }
+                },
+                modifier = videoModifier
+            )
+        }
 
         // GPU-composited colour treatment. Placed above the video surface but
         // below the HUD so telemetry stays readable.
@@ -327,13 +374,8 @@ private fun TvCastSettingsPanel(
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold
             )
-            Box(
-                modifier = Modifier
-                    .background(Color(0xFF202830), RoundedCornerShape(8.dp))
-                    .clickable { onClose() }
-                    .padding(horizontal = 14.dp, vertical = 8.dp)
-            ) {
-                Text(text = "CLOSE", color = TvNeonGreen, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            TvFocusableButton(onClick = onClose) { focused ->
+                Text("CLOSE", color = if (focused) Color.Black else Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             }
         }
 
@@ -397,7 +439,7 @@ private fun TvCastSettingsPanel(
         )
         Text(
             text = "Stream shape ${String.format("%.2f", settingsAspect)}:1 · " +
-                "Stretch fills every pixel, Fit keeps black bars, Fill crops the edges.",
+                "Fit preserves the whole frame; Full and Stretch fill the TV without cropping.",
             color = Color.Gray,
             fontSize = 11.sp
         )
@@ -423,86 +465,16 @@ private fun TvCastSettingsPanel(
 }
 
 @Composable
-private fun TvChip(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    var focused by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(8.dp)
-    val accent = when {
-        selected -> TvNeonGreen
-        focused -> TvNeonBlue
-        else -> Color(0xFF30363D)
-    }
-    Box(
-        modifier = modifier
-            .onFocusChanged { focused = it.isFocused }
-            .then(
-                if (selected) Modifier.shadow(
-                    elevation = 8.dp,
-                    ambientColor = TvNeonGreen.copy(alpha = 0.6f),
-                    spotColor = TvNeonGreen.copy(alpha = 0.6f),
-                    shape = shape
-                ) else Modifier
-            )
-            .background(
-                when {
-                    selected -> TvNeonGreen.copy(alpha = 0.30f)
-                    focused -> TvNeonBlue.copy(alpha = 0.18f)
-                    else -> Color(0xFF161B22)
-                },
-                shape
-            )
-            .border(
-                if (selected || focused) 2.dp else 1.dp,
-                accent,
-                shape
-            )
-            .clickable { onClick() }
-            .padding(horizontal = 10.dp, vertical = 6.dp)
-    ) {
-        Text(
-            text = if (selected) "● $label" else label,
-            color = when {
-                selected -> Color.White
-                focused -> TvNeonBlue
-                else -> Color.LightGray
-            },
-            fontSize = 11.sp,
-            fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium
-        )
+private fun TvChip(label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    TvFocusableButton(onClick = onClick, modifier = modifier, isSelected = selected) { focused ->
+        Text(if (selected) "● $label" else label, color = if (focused) Color.Black else Color.White,
+            fontSize = 11.sp, fontWeight = if (selected || focused) FontWeight.ExtraBold else FontWeight.Medium)
     }
 }
 
 @Composable
-private fun TvResetButton(
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    var focused by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(8.dp)
-    Box(
-        modifier = modifier
-            .onFocusChanged { focused = it.isFocused }
-            .background(
-                if (focused) TvWarning.copy(alpha = 0.30f) else Color(0xFF2A141B),
-                shape
-            )
-            .border(
-                if (focused) 2.dp else 1.dp,
-                if (focused) TvNeonBlue else TvWarning.copy(alpha = 0.8f),
-                shape
-            )
-            .clickable { onClick() }
-            .padding(horizontal = 12.dp, vertical = 7.dp)
-    ) {
-        Text(
-            text = "RESET SERVER",
-            color = if (focused) TvNeonBlue else Color(0xFFFF8A80),
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold
-        )
+private fun TvResetButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    TvFocusableButton(onClick = onClick, modifier = modifier) { focused ->
+        Text("RESET SERVER", color = if (focused) Color.Black else Color(0xFFFF8A80), fontSize = 11.sp, fontWeight = FontWeight.Bold)
     }
 }

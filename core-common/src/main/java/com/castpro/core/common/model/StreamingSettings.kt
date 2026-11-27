@@ -67,7 +67,9 @@ data class StreamingSettings(
     val enableWebServer: Boolean = true,
     val webPort: Int = 8080,
     val isGamingMode: Boolean = true,
-    val autoConnect: Boolean = true
+    val autoConnect: Boolean = true,
+    /** Experimental NDK encoder; false keeps the stable MediaCodec encoder. */
+    val useNativeEncoder: Boolean = false
 ) {
     fun toStreamConfig(targetPort: Int = 8998): StreamConfig {
         return StreamConfig(

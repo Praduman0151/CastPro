@@ -250,6 +250,10 @@ class NativeScreenEncoder(
             codecConfigBytes = null
             pendingKeyframe = false
         }
+        inputSurface?.let { surface ->
+            runCatching { surface.release() }
+                .onFailure { Log.w(TAG, "Native encoder input Surface release failed", it) }
+        }
         inputSurface = null
     }
 }

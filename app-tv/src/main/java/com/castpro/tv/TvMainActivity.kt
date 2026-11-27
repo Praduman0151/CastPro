@@ -3,6 +3,7 @@ package com.castpro.tv
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.TextureView
+import android.view.SurfaceView
 import android.view.ViewTreeObserver
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -17,12 +18,16 @@ import androidx.compose.runtime.getValue
 import com.castpro.core.common.model.StreamConfig
 import com.castpro.core.streaming.audio.TvAudioPlayer
 import com.castpro.tv.render.TvTextureRenderer
+import com.castpro.tv.render.TvSurfaceRenderer
 import com.castpro.tv.ui.screens.TvReceiverScreen
 import com.castpro.tv.viewmodel.TvReceiverViewModel
 
 class TvMainActivity : ComponentActivity() {
     private val viewModel: TvReceiverViewModel by viewModels()
-    private var surfaceRenderer: TvTextureRenderer? = null
+    private var textureRenderer: TvTextureRenderer? = null
+    private var surfaceViewRenderer: TvSurfaceRenderer? = null
+    private var diagForceSoftware = false
+    private var diagUseSurfaceView = false
     private var audioPlayer: TvAudioPlayer? = null
     private var serverStarted = false
     private var rootLayoutListener: ViewTreeObserver.OnGlobalLayoutListener? = null
@@ -30,6 +35,13 @@ class TvMainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         installTvCrashHandler(this)
+        // Runtime diagnostic switches: defaults preserve the production path.
+        diagForceSoftware = intent.getBooleanExtra("diag_force_sw", false)
+        diagUseSurfaceView = intent.getBooleanExtra("diag_use_surface_view", true)
+        android.util.Log.i(
+            "CastProDiagnostics",
+            "diag_force_sw=$diagForceSoftware diag_use_surface_view=$diagUseSurfaceView"
+        )
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         // Draw behind system bars so the video really reaches the panel edges.
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -56,10 +68,12 @@ class TvMainActivity : ComponentActivity() {
             // Apply display-mode changes to the live decoder and its texture
             // matrix without restarting the stream.
             LaunchedEffect(state.displayMode) {
-                surfaceRenderer?.setDisplayMode(state.displayMode)
+                textureRenderer?.setDisplayMode(state.displayMode)
+                surfaceViewRenderer?.setDisplayMode(state.displayMode)
             }
             TvReceiverScreen(
                 state = state,
+                useSurfaceView = diagUseSurfaceView,
                 onDismissCrash = { viewModel.dismissCrashReport() },
                 onDisplayModeChanged = { mode -> viewModel.setDisplayMode(mode) },
                 onColorFilterChanged = { filter -> viewModel.setColorFilter(filter) },
@@ -85,6 +99,9 @@ class TvMainActivity : ComponentActivity() {
                         onMetricsUpdated = { metrics ->
                             runOnUiThread { viewModel.updateMetrics(metrics) }
                         },
+                        onVideoSizeChanged = { width, height ->
+                            runOnUiThread { viewModel.updateVideoSize(width, height) }
+                        },
                         onError = { message ->
                             // Surface-level codec errors are non-fatal; keep
                             // the receiver usable but show what happened.
@@ -94,51 +111,77 @@ class TvMainActivity : ComponentActivity() {
                         clockOffsetProvider = { viewModel.currentClockOffsetNs() },
                         onFrameRendered = {
                             runOnUiThread { viewModel.markFrameRendered() }
+                        },
+                        forceSoftwareAvc = diagForceSoftware
+                    )
+                    textureRenderer = renderer
+
+                    startServerIfNeeded(player)
+                },
+                onSurfaceViewCreated = { surfaceView ->
+                    surfaceView.addOnLayoutChangeListener { view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+                        if (left != oldLeft || top != oldTop || right != oldRight || bottom != oldBottom) {
+                            android.util.Log.i("TvLayout", "SurfaceView bounds=${right-left}x${bottom-top}")
+                        }
+                    }
+                    surfaceViewRenderer = TvSurfaceRenderer(
+                        surfaceView = surfaceView,
+                        initialConfig = viewModel.uiState.value.streamConfig,
+                        initialDisplayMode = viewModel.uiState.value.displayMode,
+                        forceSoftwareAvc = diagForceSoftware,
+                        onMetricsUpdated = { metrics ->
+                            runOnUiThread { viewModel.updateMetrics(metrics) }
+                        },
+                        onVideoSizeChanged = { width, height ->
+                            runOnUiThread { viewModel.updateVideoSize(width, height) }
+                        },
+                        onError = { message ->
+                            android.util.Log.e("TvMainActivity", message)
+                            runOnUiThread { viewModel.reportError(message) }
+                        },
+                        clockOffsetProvider = { viewModel.currentClockOffsetNs() },
+                        onFrameRendered = {
+                            runOnUiThread { viewModel.markFrameRendered() }
                         }
                     )
-                    surfaceRenderer = renderer
-
-                    if (!serverStarted) {
-                        serverStarted = true
-                        viewModel.startServer(
-                            onStreamConfig = { packet ->
-                                val config = StreamConfig(
-                                    width = packet.width,
-                                    height = packet.height,
-                                    fps = packet.fps,
-                                    bitrate = packet.bitrate,
-                                    isGamingMode = packet.isGamingMode,
-                                    codecMime = packet.codec.mimeType
-                                )
-                                surfaceRenderer?.onConfig(config)
-                            },
-                            onFrameReceived = { data, offset, length, timestampNano, isGamingMode, isCodecConfig, isKeyframe ->
-                                // Do not reveal the video surface on packet arrival;
-                                // only a real rendered frame may hide the standby UI.
-                                surfaceRenderer?.onFrame(
-                                    data,
-                                    offset,
-                                    length,
-                                    timestampNano,
-                                    isGamingMode,
-                                    isCodecConfig,
-                                    isKeyframe
-                                )
-                            },
-                            onAudioReceived = { data, offset, length ->
-                                player.playAudioChunk(data, offset, length)
-                            },
-                            onGeometryReceived = { geometry ->
-                                // Rotation metadata only. Phone sensor geometry
-                                // must never resize the video surface: doing so
-                                // made the whole cast jump when quality changed.
-                                surfaceRenderer?.onGeometry(geometry)
-                            }
-                        )
-                    }
+                    startServerIfNeeded(player)
                 }
             )
         }
+    }
+
+    private fun startServerIfNeeded(player: TvAudioPlayer) {
+        if (serverStarted) return
+        serverStarted = true
+        viewModel.startServer(
+            onStreamConfig = { packet ->
+                val config = StreamConfig(
+                    width = packet.width,
+                    height = packet.height,
+                    fps = packet.fps,
+                    bitrate = packet.bitrate,
+                    isGamingMode = packet.isGamingMode,
+                    codecMime = packet.codec.mimeType
+                )
+                textureRenderer?.onConfig(config)
+                surfaceViewRenderer?.onConfig(config)
+            },
+            onFrameReceived = { data, offset, length, timestampNano, isGamingMode, isCodecConfig, isKeyframe ->
+                textureRenderer?.onFrame(data, offset, length, timestampNano, isGamingMode, isCodecConfig, isKeyframe)
+                surfaceViewRenderer?.onFrame(data, offset, length, timestampNano, isGamingMode, isCodecConfig, isKeyframe)
+            },
+            onAudioReceived = { data, offset, length -> player.playAudioChunk(data, offset, length) },
+            onGeometryReceived = { geometry ->
+                textureRenderer?.onGeometry(geometry)
+                surfaceViewRenderer?.onGeometry(geometry)
+            },
+            onSessionDisconnected = {
+                runOnUiThread {
+                    textureRenderer?.onSessionDisconnected()
+                    surfaceViewRenderer?.onSessionDisconnected()
+                }
+            }
+        )
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
@@ -167,7 +210,8 @@ class TvMainActivity : ComponentActivity() {
         rootLayoutListener?.let { window.decorView.viewTreeObserver.removeOnGlobalLayoutListener(it) }
         rootLayoutListener = null
         super.onDestroy()
-        surfaceRenderer?.release()
+        textureRenderer?.release()
+        surfaceViewRenderer?.release()
         audioPlayer?.stop()
         audioPlayer = null
     }

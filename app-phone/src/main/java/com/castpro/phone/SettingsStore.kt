@@ -28,7 +28,8 @@ class SettingsStore(context: Context) {
             enableWebServer = prefs.getBoolean(KEY_WEB, true),
             webPort = prefs.getInt(KEY_WEB_PORT, 8080),
             isGamingMode = prefs.getBoolean(KEY_GAMING, true),
-            autoConnect = prefs.getBoolean(KEY_AUTO_CONNECT, true)
+            autoConnect = prefs.getBoolean(KEY_AUTO_CONNECT, true),
+            useNativeEncoder = prefs.getBoolean(KEY_NATIVE_ENCODER, false)
         )
     }
 
@@ -46,6 +47,7 @@ class SettingsStore(context: Context) {
             .putInt(KEY_WEB_PORT, settings.webPort)
             .putBoolean(KEY_GAMING, settings.isGamingMode)
             .putBoolean(KEY_AUTO_CONNECT, settings.autoConnect)
+            .putBoolean(KEY_NATIVE_ENCODER, settings.useNativeEncoder)
             .apply()
     }
 
@@ -96,6 +98,7 @@ class SettingsStore(context: Context) {
         const val KEY_WEB_PORT = "web_port"
         const val KEY_GAMING = "gaming"
         const val KEY_AUTO_CONNECT = "auto_connect"
+        const val KEY_NATIVE_ENCODER = "native_encoder_opt_in"
         const val KEY_LAST_HOST = "last_host"
         const val KEY_LAST_PORT = "last_port"
         const val KEY_LAST_NAME = "last_name"

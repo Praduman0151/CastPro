@@ -15,6 +15,8 @@ object Constants {
     const val TYPE_GEOMETRY: Byte = 0x05
     const val TYPE_STREAM_CONFIG: Byte = 0x06
     const val TYPE_VIDEO_JPEG: Byte = 0x07
+    /** Sender is intentionally ending the current TCP cast session. */
+    const val TYPE_SESSION_END: Byte = 0x08
 
     /** A corrupt or hostile peer must never make the receiver allocate gigabytes. */
     const val MAX_PAYLOAD_SIZE = 32 * 1024 * 1024
@@ -42,9 +44,9 @@ object Constants {
     
     // Gaming Mode Defaults
     const val GAMING_FPS = 60
-    const val GAMING_BITRATE_BPS = 12_000_000 // 12 Mbps
+    const val GAMING_BITRATE_BPS = 8_000_000 // 8 Mbps
     const val NORMAL_BITRATE_BPS = 6_000_000  // 6 Mbps
-    const val DEFAULT_I_FRAME_INTERVAL = 1    // 1 second
+    const val DEFAULT_I_FRAME_INTERVAL = 3    // 3 seconds
 
     // Audio Defaults
     const val AUDIO_SAMPLE_RATE = 48000

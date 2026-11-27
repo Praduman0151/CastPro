@@ -220,6 +220,13 @@ fun PhoneSettingsScreen(
                     checked = settings.enableWebServer,
                     onCheckedChange = { changeManually(settings.copy(enableWebServer = it)) }
                 )
+                HorizontalDivider(color = GamerCardBorder.copy(alpha = 0.5f))
+                SettingSwitchRow(
+                    title = "Experimental Native Encoder (Opt-in)",
+                    subtitle = "Uses the NDK encoder when enabled; off by default and falls back to Hardware MediaCodec if unavailable",
+                    checked = settings.useNativeEncoder,
+                    onCheckedChange = { changeManually(settings.copy(useNativeEncoder = it)) }
+                )
             }
         }
 

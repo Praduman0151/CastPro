@@ -2,8 +2,10 @@ package com.castpro.core.streaming.transport
 
 import android.util.Log
 import com.castpro.core.common.model.GeometryPacket
+import com.castpro.core.common.protocol.AnnexBCodecConfig
 import com.castpro.core.common.protocol.Constants
 import com.castpro.core.common.protocol.PacketHeader
+import com.castpro.core.common.protocol.PacketStreamReader
 import com.castpro.core.common.protocol.StreamConfigPacket
 import java.io.InputStream
 import java.net.InetSocketAddress
@@ -32,6 +34,8 @@ class LowLatencySocketServer(
     @Volatile private var clientSocket: Socket? = null
     private val isRunning = AtomicBoolean(false)
     private var serverThread: Thread? = null
+    private var loggedVideoPackets = 0
+    @Volatile private var diagnosticCodecMime = "video/avc"
 
     fun start(): Boolean {
         if (!isRunning.compareAndSet(false, true)) return false
@@ -59,7 +63,10 @@ class LowLatencySocketServer(
                 try {
                     val client = serverSocket?.accept() ?: break
                     client.tcpNoDelay = true
-                    client.receiveBufferSize = 256 * 1024
+                    client.receiveBufferSize = 64 * 1024
+                    // Heartbeats arrive once per second; five seconds without any packet
+                    // means the sender disappeared even if the TCP FIN was never observed.
+                    client.soTimeout = 5_000
                     clientSocket = client
                     val clientIp = client.inetAddress.hostAddress ?: "Unknown"
                     Log.i(tag, "Client connected: $clientIp")
@@ -90,74 +97,63 @@ class LowLatencySocketServer(
     }
 
     private fun handleClientStream(inputStream: InputStream) {
-        val headerBytes = ByteArray(PacketHeader.HEADER_SIZE)
-        val headerBuffer = ByteBuffer.wrap(headerBytes)
-
         while (isRunning.get()) {
-            if (!readFully(inputStream, headerBytes, PacketHeader.HEADER_SIZE)) return
-            headerBuffer.clear()
-            val header = PacketHeader.readFrom(headerBuffer) ?: return
-            if (header.payloadLength < 0 || header.payloadLength > Constants.MAX_PAYLOAD_SIZE) {
-                Log.w(tag, "Rejecting packet with invalid length ${header.payloadLength}")
+            val packet = try {
+                PacketStreamReader.readPacket(inputStream)
+            } catch (e: IllegalArgumentException) {
+                Log.w(tag, "Rejecting malformed packet: ${e.message}")
                 return
-            }
-
-            val payload = ByteArray(header.payloadLength)
-            if (!readFully(inputStream, payload, header.payloadLength)) return
-
+            } catch (e: Exception) {
+                Log.w(tag, "Packet stream ended: ${e.message}")
+                return
+            } ?: return
+            val header = packet.header
+            val payload = packet.payload
             when (header.type) {
                 Constants.TYPE_VIDEO_NAL -> {
                     val flags = header.flags.toInt()
                     val isGamingMode = (flags and Constants.FLAG_GAMING_MODE.toInt()) != 0
                     val isCodecConfig = (flags and Constants.FLAG_CODEC_CONFIG.toInt()) != 0
-                    // Keep the sender's IDR marker. MediaCodec emits
-                    // length-prefixed (AVCC) H.264, so the receiver cannot
-                    // reliably recognise a keyframe by scanning for Annex-B
-                    // start codes in the payload.
                     val isKeyframe = (flags and Constants.FLAG_KEYFRAME.toInt()) != 0
+                    if (loggedVideoPackets < 10) {
+                        loggedVideoPackets++
+                        Log.i(
+                            tag,
+                            "Video packet #$loggedVideoPackets type=${header.type} flags=0x${flags.toString(16)} " +
+                                "bytes=${payload.size} first16=${AnnexBCodecConfig.hexPrefix(payload)} " +
+                                "annexBNalTypes=${AnnexBCodecConfig.nalUnitTypes(diagnosticCodecMime, payload)} " +
+                                "codecConfig=$isCodecConfig keyframe=$isKeyframe"
+                        )
+                    }
                     try {
                         onFrameReceived(
-                            payload,
-                            0,
-                            header.payloadLength,
-                            header.timestampNano,
-                            isGamingMode,
-                            isCodecConfig,
-                            isKeyframe
+                            payload, 0, payload.size, header.timestampNano,
+                            isGamingMode, isCodecConfig, isKeyframe
                         )
                     } catch (e: Exception) {
-                        // A decoder hiccup must not tear down the socket or
-                        // take down the receiver process.
                         Log.w(tag, "Dropping video packet ${header.sequenceNumber}", e)
                     }
                 }
                 Constants.TYPE_AUDIO_DATA -> runCatching {
-                    onAudioReceived(payload, 0, header.payloadLength)
+                    onAudioReceived(payload, 0, payload.size)
                 }
                 Constants.TYPE_GEOMETRY -> runCatching {
                     GeometryPacket.fromByteArray(payload)?.let(onGeometryReceived)
                 }
                 Constants.TYPE_STREAM_CONFIG -> runCatching {
-                    StreamConfigPacket.fromByteArray(payload)?.let(onStreamConfigReceived)
+                    StreamConfigPacket.fromByteArray(payload)?.let { config ->
+                        diagnosticCodecMime = config.codec.mimeType
+                        onStreamConfigReceived(config)
+                    }
                 }
                 Constants.TYPE_HEARTBEAT -> runCatching { onHeartbeatReceived(header.timestampNano) }
+                Constants.TYPE_SESSION_END -> {
+                    Log.i(tag, "Sender ended the cast session cleanly")
+                    return
+                }
                 else -> Log.d(tag, "Ignoring packet type ${header.type}")
             }
         }
-    }
-
-    private fun readFully(stream: InputStream, buffer: ByteArray, length: Int): Boolean {
-        var totalRead = 0
-        while (totalRead < length) {
-            val read = try {
-                stream.read(buffer, totalRead, length - totalRead)
-            } catch (e: Exception) {
-                return false
-            }
-            if (read < 0) return false
-            totalRead += read
-        }
-        return true
     }
 
     fun stop() {
