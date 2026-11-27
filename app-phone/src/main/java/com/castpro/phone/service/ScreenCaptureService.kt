@@ -40,6 +40,7 @@ import com.castpro.core.streaming.monitor.ScreenResolutionMonitor
 import com.castpro.core.streaming.lifecycle.CleanupStep
 import com.castpro.core.streaming.lifecycle.IndependentCleanup
 import com.castpro.core.streaming.lifecycle.PipelineReplacementGate
+import com.castpro.core.streaming.lifecycle.KeyFrameRequestLimiter
 import com.castpro.core.streaming.lifecycle.OrientationReconfigurationPolicy
 import com.castpro.core.streaming.lifecycle.VideoStallAction
 import com.castpro.core.streaming.lifecycle.VideoStallPolicy
@@ -110,6 +111,7 @@ class ScreenCaptureService : Service() {
     private val lastVideoFramesSent = AtomicLong(0)
     private val lastVideoProgressAtMs = AtomicLong(0)
     private val stallRecoveryRequested = AtomicBoolean(false)
+    private val watchdogKeyFrameLimiter = KeyFrameRequestLimiter(minIntervalMs = 500L)
 
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
@@ -355,6 +357,8 @@ class ScreenCaptureService : Service() {
                     },
                     install = {
                     if (!transportConnected || mediaProjection !== project || transport !== tcp) {
+                        runCatching { enc.stop() }
+                        runCatching { inputSurface.release() }
                         throw IllegalStateException("Session resources changed while applying quality")
                     }
                     // Do NOT create a second VirtualDisplay from the same
@@ -824,7 +828,7 @@ class ScreenCaptureService : Service() {
                 val now = System.nanoTime() / 1_000_000L
                 val stalledFor = now - lastVideoProgressAtMs.get()
                 val action = VideoStallPolicy.action(stalledFor)
-                if (action != VideoStallAction.NONE) {
+                if (action != VideoStallAction.NONE && watchdogKeyFrameLimiter.tryAcquire()) {
                     runCatching { encoder?.requestKeyFrame() }
                         .onFailure { Log.w(tag, "Stall watchdog could not request IDR", it) }
                 }
