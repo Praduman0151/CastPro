@@ -34,6 +34,7 @@ import com.castpro.core.common.protocol.StreamConfigPacket
 import com.castpro.core.streaming.audio.GameAudioCapture
 import com.castpro.core.streaming.encoder.ScreenEncoderBackend
 import com.castpro.core.streaming.encoder.ScreenEncoderFactory
+import com.castpro.core.streaming.encoder.EncoderStats
 import com.castpro.core.streaming.encoder.computeAspectMatchedSize
 import com.castpro.core.streaming.monitor.ScreenResolutionMonitor
 import com.castpro.core.streaming.monitor.ScreenWakeLock
@@ -55,6 +56,7 @@ import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 class ScreenCaptureService : Service() {
     private val tag = "ScreenCaptureService"
@@ -95,6 +97,10 @@ class ScreenCaptureService : Service() {
     private var lastTransportError: String? = null
     private var connectionTimeoutJob: Job? = null
     private var heartbeatJob: Job? = null
+    private var videoStallWatchdogJob: Job? = null
+    private val lastVideoFramesSent = AtomicLong(0)
+    private val lastVideoProgressAtMs = AtomicLong(0)
+    private val stallRecoveryRequested = AtomicBoolean(false)
 
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
@@ -277,7 +283,8 @@ class ScreenCaptureService : Service() {
         bitrate: Int,
         fps: Int,
         codec: String,
-        isGamingMode: Boolean
+        isGamingMode: Boolean,
+        forceRecreate: Boolean = false
     ) {
         if (!started.get()) return
         serviceScope.launch {
@@ -297,7 +304,7 @@ class ScreenCaptureService : Service() {
                 isGamingMode = isGamingMode,
                 codecMime = codec
             )
-            if (currentConfig == next) return@launch
+            if (currentConfig == next && !forceRecreate) return@launch
             appendStatus("applyLiveConfig ${outputWidth}x$outputHeight@${safeFps}fps ${safeBitrate / 1_000_000}M $codec")
             Log.i(tag, "Applying live quality: ${next.width}x${next.height}@${next.fps} $codec")
             try {
@@ -308,6 +315,7 @@ class ScreenCaptureService : Service() {
                     config = next,
                     transport = tcp,
                     onStats = { stats ->
+                        recordEncoderStats(stats)
                         CastSessionBus.updateStats(
                             fps = stats.fps,
                             bitrateMbps = stats.bitrateMbps,
@@ -551,6 +559,7 @@ class ScreenCaptureService : Service() {
                             config = config,
                             transport = tcp,
                             onStats = { stats ->
+                                recordEncoderStats(stats)
                                 CastSessionBus.updateStats(
                                     fps = stats.fps,
                                     bitrateMbps = stats.bitrateMbps,
@@ -640,6 +649,7 @@ class ScreenCaptureService : Service() {
                 }
                 monitor.start()
                 resolutionMonitor = monitor
+                if (host.isNotBlank()) startVideoStallWatchdog()
 
                 if (enableOverlay &&
                     (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this@ScreenCaptureService))
@@ -749,6 +759,56 @@ class ScreenCaptureService : Service() {
      * report a real one-way latency instead of a value distorted by seconds of
      * wall-clock difference between the two devices.
      */
+    private fun recordEncoderStats(stats: EncoderStats) {
+        val previous = lastVideoFramesSent.getAndSet(stats.framesSent)
+        if (stats.framesSent > previous) {
+            lastVideoProgressAtMs.set(System.nanoTime() / 1_000_000L)
+            stallRecoveryRequested.set(false)
+        }
+    }
+
+    /**
+     * Heartbeats only prove TCP liveness. This watchdog independently tracks
+     * delivered video-frame progression and asks for an IDR, then rebuilds the
+     * encoder/VirtualDisplay pipeline if video remains stalled.
+     */
+    private fun startVideoStallWatchdog() {
+        videoStallWatchdogJob?.cancel()
+        lastVideoFramesSent.set(0)
+        lastVideoProgressAtMs.set(System.nanoTime() / 1_000_000L)
+        stallRecoveryRequested.set(false)
+        videoStallWatchdogJob = serviceScope.launch {
+            while (isActive && started.get() && !stopping.get()) {
+                delay(2_000)
+                if (!transportConnected || encoder == null) continue
+                val now = System.nanoTime() / 1_000_000L
+                val stalledFor = now - lastVideoProgressAtMs.get()
+                if (stalledFor >= 3_000) {
+                    runCatching { encoder?.requestKeyFrame() }
+                        .onFailure { Log.w(tag, "Stall watchdog could not request IDR", it) }
+                }
+                if (stalledFor >= 8_000 && stallRecoveryRequested.compareAndSet(false, true)) {
+                    val active = currentConfig
+                    if (active != null) {
+                        Log.e(tag, "VIDEO_STALL detected: no delivered frame for ${stalledFor}ms; rebuilding encoder")
+                        applyLiveConfig(
+                            width = active.width,
+                            height = active.height,
+                            dpi = active.dpi,
+                            bitrate = active.bitrate,
+                            fps = active.fps,
+                            codec = active.codecMime,
+                            isGamingMode = active.isGamingMode,
+                            forceRecreate = true
+                        )
+                    } else {
+                        stallRecoveryRequested.set(false)
+                    }
+                }
+            }
+        }
+    }
+
     private fun startHeartbeatLoop(activeTransport: StreamTransport) {
         heartbeatJob?.cancel()
         heartbeatJob = serviceScope.launch {
@@ -834,6 +894,8 @@ class ScreenCaptureService : Service() {
             .onFailure { Log.w(tag, "Could not send SESSION_END", it) }
         runCatching { heartbeatJob?.cancel() }
             .onFailure { Log.w(tag, "Could not cancel heartbeat", it) }
+        runCatching { videoStallWatchdogJob?.cancel() }
+            .onFailure { Log.w(tag, "Could not cancel video stall watchdog", it) }
         runCatching { webMirror?.stop() }
             .onFailure { Log.w(tag, "Could not stop web mirror", it) }
         runCatching { resolutionMonitor?.stop() }
@@ -887,6 +949,10 @@ class ScreenCaptureService : Service() {
             connectionTimeoutJob = null
             heartbeatJob?.cancel()
             heartbeatJob = null
+            videoStallWatchdogJob = null
+            lastVideoFramesSent.set(0)
+            lastVideoProgressAtMs.set(0)
+            stallRecoveryRequested.set(false)
             CastSessionBus.stop(failure)
             if (failure != null) {
                 CastSessionBus.setConnectionState(
