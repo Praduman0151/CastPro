@@ -913,9 +913,10 @@ class ScreenCaptureService : Service() {
         val failedHost = currentHost
         val failedName = currentReceiverName
         Log.i(tag, "Stopping screen casting${failure?.let { ": $it" } ?: ""}")
-        // IndependentCleanup guarantees later resources are released even
-        // when an earlier close/stop implementation throws.
-        IndependentCleanup.run(
+        try {
+            // IndependentCleanup guarantees later resources are released even
+            // when an earlier close/stop implementation throws.
+            IndependentCleanup.run(
             listOf(
                 CleanupStep("SESSION_END") { sendSessionEnd() },
                 CleanupStep("heartbeat") { heartbeatJob?.cancel() },
@@ -939,10 +940,8 @@ class ScreenCaptureService : Service() {
                     })
                 }
             )
-        ) { resource, error -> Log.w(tag, "Could not release $resource", error) }
-        virtualDisplay = null
-
-        try {
+            ) { resource, error -> Log.w(tag, "Could not release $resource", error) }
+            virtualDisplay = null
         } finally {
             // Always return the panel to the user's previous brightness after a cast.
             runCatching { screenDimController.restore() }
