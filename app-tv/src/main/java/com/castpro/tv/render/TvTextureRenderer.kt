@@ -30,7 +30,8 @@ class TvTextureRenderer(
     private val onMetricsUpdated: (LatencyMetrics) -> Unit,
     private val onError: (String) -> Unit = {},
     private val clockOffsetProvider: () -> Long? = { null },
-    private val onFrameRendered: () -> Unit = {}
+    private val onFrameRendered: () -> Unit = {},
+    private val forceSoftwareAvc: Boolean = false
 ) : TextureView.SurfaceTextureListener {
 
     private val tag = "TvTextureRenderer"
@@ -53,6 +54,7 @@ class TvTextureRenderer(
         sizeDecoderBuffer(surfaceTexture)
         val surface = Surface(surfaceTexture)
         outputSurface = surface
+        Log.d(tag, "TEXTURE_SURFACE created width=$width height=$height valid=${surface.isValid} texture=${surfaceTexture.hashCode()}")
         decoder = HardwareVideoDecoder(
             initialConfig = config,
             surface = surface,
@@ -60,7 +62,8 @@ class TvTextureRenderer(
             onMetricsUpdated = onMetricsUpdated,
             onError = onError,
             clockOffsetProvider = clockOffsetProvider,
-            initialCodecConfig = sessionCodecConfig?.copyOf()
+            initialCodecConfig = sessionCodecConfig?.copyOf(),
+            diagnosticDecoderName = if (forceSoftwareAvc) "c2.android.avc.decoder" else null
         ).apply { start() }
         if (sessionCodecConfig != null) {
             Log.i(tag, "Recreated decoder seeded with cached session CSD (${sessionCodecConfig!!.size} bytes)")
@@ -78,6 +81,9 @@ class TvTextureRenderer(
 
     override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) {
         renderedFrameUpdates++
+        if (renderedFrameUpdates <= 5) {
+            Log.d(tag, "TEXTURE_SURFACE updated count=$renderedFrameUpdates timestampNs=${surfaceTexture.timestamp} texture=${surfaceTexture.hashCode()}")
+        }
         if (renderedFrameUpdates == 1) {
             Log.i(tag, "First rendered frame reached TextureView at wallTimeMs=${System.currentTimeMillis()} surface=${surfaceTexture.hashCode()}")
             onFrameRendered()

@@ -1,6 +1,7 @@
 package com.castpro.tv.ui.screens
 
 import android.view.TextureView
+import android.view.SurfaceView
 import android.view.ViewGroup
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -45,6 +46,8 @@ import com.castpro.tv.viewmodel.TvUiState
 fun TvReceiverScreen(
     state: TvUiState,
     onSurfaceCreated: (TextureView) -> Unit,
+    useSurfaceView: Boolean = false,
+    onSurfaceViewCreated: (SurfaceView) -> Unit = {},
     onDismissCrash: () -> Unit = {},
     onDisplayModeChanged: (TvDisplayMode) -> Unit = {},
     onColorFilterChanged: (TvColorFilter) -> Unit = {},
@@ -63,18 +66,33 @@ fun TvReceiverScreen(
         // The view is always the full panel. The renderer applies the selected
         // transform matrix to the decoded frame; STRETCH uses separate X/Y
         // scales, so the picture can never leave unused black bars.
-        AndroidView(
-            factory = { context ->
-                TextureView(context).apply {
-                    layoutParams = ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT
-                    )
-                    onSurfaceCreated(this)
-                }
-            },
-            modifier = Modifier.fillMaxSize()
-        )
+        if (useSurfaceView) {
+            AndroidView(
+                factory = { context ->
+                    SurfaceView(context).apply {
+                        layoutParams = ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT
+                        )
+                        onSurfaceViewCreated(this)
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            AndroidView(
+                factory = { context ->
+                    TextureView(context).apply {
+                        layoutParams = ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT
+                        )
+                        onSurfaceCreated(this)
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        }
 
         // GPU-composited colour treatment. Placed above the video surface but
         // below the HUD so telemetry stays readable.

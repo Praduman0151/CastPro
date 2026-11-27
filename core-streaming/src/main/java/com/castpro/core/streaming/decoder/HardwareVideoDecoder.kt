@@ -24,7 +24,9 @@ class HardwareVideoDecoder(
     private val onMetricsUpdated: (LatencyMetrics) -> Unit,
     private val onError: (String) -> Unit = {},
     private val clockOffsetProvider: () -> Long? = { null },
-    initialCodecConfig: ByteArray? = null
+    initialCodecConfig: ByteArray? = null,
+    /** Diagnostic-only codec override; null preserves platform hardware-first selection. */
+    private val diagnosticDecoderName: String? = null
 ) {
     private val tag = "HardwareVideoDecoder"
     private val lock = Any()
@@ -108,7 +110,16 @@ class HardwareVideoDecoder(
         // software AVC/HEVC decoder. Some TV SoCs advertise a codec but reject
         // configure() or start() for the phone's resolution; without a fallback
         // the receiver reports an error and never draws another frame.
-        val candidates = listOf(null) + softwareDecoderNames()
+        val candidates = diagnosticDecoderName?.let { listOf(it) }
+            ?: (listOf(null) + softwareDecoderNames())
+        if (diagnosticDecoderName != null &&
+            !config.codecMime.equals(MediaFormat.MIMETYPE_VIDEO_AVC, ignoreCase = true)
+        ) {
+            running.set(false)
+            onError("Forced diagnostic decoder is only supported for H.264/AVC.")
+            Log.e(tag, "Ignoring diagnostic decoder override for mime=${config.codecMime}")
+            return
+        }
         var lastError: Exception? = null
         for (preferredName in candidates) {
             var codec: MediaCodec? = null
@@ -215,6 +226,11 @@ class HardwareVideoDecoder(
             codec.queueInputBuffer(inputIndex, 0, 0, System.nanoTime() / 1_000L, 0)
             return false
         }
+        Log.d(
+            tag,
+            "DECODER_CSD_SUBMIT codec=${codec.name} bytes=$length " +
+                "nalTypes=${AnnexBCodecConfig.nalUnitTypes(config.codecMime, data, offset, length)}"
+        )
         buffer.put(data, offset, length)
         codec.queueInputBuffer(
             inputIndex,
@@ -246,7 +262,7 @@ class HardwareVideoDecoder(
             val keyFrame = isKeyframe || isKeyFrame(data, offset, length)
             lastInputTimestampNano = timestampNano
             lastInputGamingMode = isGamingMode
-            if (loggedInputPackets < 10) {
+            if (loggedInputPackets < 5) {
                 loggedInputPackets++
                 Log.i(
                     tag,
@@ -394,12 +410,21 @@ class HardwareVideoDecoder(
                 val cropRight = runCatching { format.getInteger("crop-right") }.getOrDefault(decodedWidth - 1)
                 val cropTop = runCatching { format.getInteger("crop-top") }.getOrDefault(0)
                 val cropBottom = runCatching { format.getInteger("crop-bottom") }.getOrDefault(decodedHeight - 1)
-                val colorFormat = runCatching { format.getInteger(MediaFormat.KEY_COLOR_FORMAT) }.getOrDefault(-1)
+                fun intValue(key: String): Int = runCatching {
+                    if (format.containsKey(key)) format.getInteger(key) else -1
+                }.getOrDefault(-1)
+                val colorFormat = intValue(MediaFormat.KEY_COLOR_FORMAT)
                 Log.i(
                     tag,
-                    "Decoder output format changed: ${decodedWidth}x${decodedHeight} " +
+                    "DECODER_OUTPUT_FORMAT codec=${codec.name} " +
+                        "size=${decodedWidth}x${decodedHeight} " +
+                        "color-format=$colorFormat " +
+                        "color-standard=${intValue(MediaFormat.KEY_COLOR_STANDARD)} " +
+                        "color-transfer=${intValue(MediaFormat.KEY_COLOR_TRANSFER)} " +
+                        "color-range=${intValue(MediaFormat.KEY_COLOR_RANGE)} " +
+                        "stride=${intValue("stride")} slice-height=${intValue("slice-height")} " +
                         "crop-left=$cropLeft crop-right=$cropRight crop-top=$cropTop crop-bottom=$cropBottom " +
-                        "color-format=$colorFormat mime=$mime profile=$profile"
+                        "mime=$mime profile=$profile format=$format"
                 )
                 continue
             }

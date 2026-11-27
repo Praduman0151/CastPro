@@ -155,7 +155,25 @@ class HardwareScreenEncoder(
                 }
 
                 if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                    captureCodecConfig(codec.outputFormat)
+                    val outputFormat = codec.outputFormat
+                    fun intValue(key: String): Int = runCatching {
+                        if (outputFormat.containsKey(key)) outputFormat.getInteger(key) else -1
+                    }.getOrDefault(-1)
+                    Log.d(
+                        tag,
+                        "ENCODER_FORMAT codec=${codec.name} format=$outputFormat " +
+                            "color-format=${intValue(MediaFormat.KEY_COLOR_FORMAT)} " +
+                            "color-standard=${intValue(MediaFormat.KEY_COLOR_STANDARD)} " +
+                            "color-transfer=${intValue(MediaFormat.KEY_COLOR_TRANSFER)} " +
+                            "color-range=${intValue(MediaFormat.KEY_COLOR_RANGE)}"
+                    )
+                    Log.d(
+                        tag,
+                        "ENCODER_CSD csd-0=${outputFormat.getByteBuffer("csd-0")?.remaining() ?: 0} " +
+                            "csd-1=${outputFormat.getByteBuffer("csd-1")?.remaining() ?: 0} " +
+                            "csd-2=${outputFormat.getByteBuffer("csd-2")?.remaining() ?: 0}"
+                    )
+                    captureCodecConfig(outputFormat)
                     continue
                 }
                 if (outputIndex < 0) {
@@ -179,7 +197,7 @@ class HardwareScreenEncoder(
                     val payload = ByteArray(bufferInfo.size)
                     encodedData.get(payload)
 
-                    if (loggedOutputPackets < 10) {
+                    if (loggedOutputPackets < 5) {
                         loggedOutputPackets++
                         Log.i(
                             tag,
