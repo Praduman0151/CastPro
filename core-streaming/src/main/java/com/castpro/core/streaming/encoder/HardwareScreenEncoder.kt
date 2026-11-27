@@ -44,6 +44,9 @@ class HardwareScreenEncoder(
     private val sequenceNumber = AtomicInteger(0)
     private val statsLock = Any()
     @Volatile private var asyncSender: AsyncFrameSender? = null
+    private val keyFrameRequestLock = Any()
+    private var lastKeyFrameRequestMs = Long.MIN_VALUE
+    private val keyFrameRequestMinIntervalMs = 500L
 
     /**
      * SPS/PPS (or VPS/SPS/PPS) reported by MediaCodec. It is resent on every
@@ -393,8 +396,21 @@ class HardwareScreenEncoder(
 
     /** Ask the codec for an IDR so a reconnected TV can start cleanly. */
     override fun requestKeyFrame() {
-        // The new socket may have joined after MediaCodec emitted its output
-        // format. Send the stored parameter sets before the IDR.
+        // Queue eviction and the independent stall watchdog can request an IDR
+        // at nearly the same instant. Coalesce those requests before touching
+        // MediaCodec; the first request still sends cached CSD before the IDR.
+        val allowed = synchronized(keyFrameRequestLock) {
+            val now = SystemClock.elapsedRealtime()
+            if (lastKeyFrameRequestMs != Long.MIN_VALUE &&
+                now - lastKeyFrameRequestMs < keyFrameRequestMinIntervalMs
+            ) {
+                false
+            } else {
+                lastKeyFrameRequestMs = now
+                true
+            }
+        }
+        if (!allowed) return
         sendCodecConfig()
         val codec = mediaCodec ?: return
         requestCodecSyncFrame(codec)
