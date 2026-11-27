@@ -40,10 +40,11 @@ object ScreenEncoderFactory {
             if (native != null) {
                 var nativeSurface: Surface? = null
                 try {
-                    nativeSurface = native.prepare()
+                    val surface = native.prepare()
+                    nativeSurface = surface
                     native.start()
                     Log.w(TAG, "EXPERIMENTAL opt-in: NativeScreenEncoder selected over TCP")
-                    return native to nativeSurface
+                    return native to surface
                 } catch (error: Throwable) {
                     runCatching { nativeSurface?.release() }
                     runCatching { native.stop() }
