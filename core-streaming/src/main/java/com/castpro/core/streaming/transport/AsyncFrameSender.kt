@@ -65,13 +65,13 @@ class AsyncFrameSender(
         val packet = QueuedPacket(header, payload, isProtected, isCodecConfig)
 
         if (!queue.offer(packet)) {
-            val dropped = queue.poll()
-            if (dropped != null && !dropped.isProtected) {
-                reportStats(dropped, delivered = false)
+            // Remove the oldest unprotected packet in place. Polling and then
+            // re-offering a protected head packet would move it behind a queued
+            // IDR, violating the required CSD-before-IDR wire order.
+            val stale = queue.firstOrNull { !it.isProtected }
+            if (stale != null && queue.remove(stale)) {
+                reportStats(stale, delivered = false)
                 runCatching { onRequestKeyFrame() }
-            } else if (dropped != null) {
-                // Never evict CSD or an IDR just to admit a newer delta frame.
-                queue.offer(dropped)
             }
             if (!queue.offer(packet)) {
                 reportStats(packet, delivered = false)
