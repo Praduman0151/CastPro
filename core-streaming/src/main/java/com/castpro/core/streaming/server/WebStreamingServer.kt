@@ -41,8 +41,74 @@ class WebStreamingServer(
 
     private var httpServerSocket: ServerSocket? = null
     private var wsServerSocket: ServerSocket? = null
-    private val activeWsClients = CopyOnWriteArrayList<Socket>()
+    private val activeWsClients = CopyOnWriteArrayList<WsClient>()
     @Volatile private var lastGeometryJson: String? = null
+
+    /**
+     * One browser connection with its own bounded send queue and writer thread.
+     *
+     * The encoder and JPEG threads call [sendFrame]; a browser on a slow link
+     * must never block them (that used to freeze the cast for everybody).
+     * Frames are dropped oldest-first when the queue is full, so the browser
+     * stays close to live instead of playing an ever-growing backlog.
+     */
+    private inner class WsClient(private val socket: Socket) {
+        private val output = BufferedOutputStream(socket.getOutputStream())
+        private val queue = WsFrameQueue()
+        private val lock = Object()
+        private var closed = false
+        private var writer: Thread? = null
+
+        fun start() {
+            writer = Thread({ writeLoop() }, "CastPro-WsClient").apply {
+                isDaemon = true
+                start()
+            }
+        }
+
+        fun send(frame: ByteArray, droppable: Boolean) {
+            synchronized(lock) {
+                if (closed) return
+                queue.offer(frame, droppable)
+                lock.notifyAll()
+            }
+        }
+
+        private fun writeLoop() {
+            try {
+                while (true) {
+                    synchronized(lock) {
+                        while (queue.pending == 0 && !closed) {
+                            try {
+                                lock.wait(500)
+                            } catch (_: InterruptedException) {
+                                return
+                            }
+                        }
+                        if (closed) return
+                    }
+                    val frame = queue.pollNow() ?: continue
+                    output.write(frame)
+                    output.flush()
+                }
+            } catch (_: Exception) {
+                // The browser went away or the socket timed out.
+                close()
+            }
+        }
+
+        fun close() {
+            synchronized(lock) {
+                if (closed) return
+                closed = true
+                queue.clear()
+                lock.notifyAll()
+            }
+            runCatching { socket.close() }
+            activeWsClients.remove(this)
+            onClientCountChanged(activeWsClients.size)
+        }
+    }
 
     fun start() {
         if (isRunning.getAndSet(true)) return
@@ -133,6 +199,7 @@ class WebStreamingServer(
     }
 
     private fun handleWsClient(socket: Socket) {
+        var client: WsClient? = null
         try {
             val input = socket.getInputStream()
             val output = socket.getOutputStream()
@@ -164,12 +231,15 @@ class WebStreamingServer(
             output.write(handshakeResponse.toByteArray())
             output.flush()
 
-            activeWsClients.add(socket)
+            val connected = WsClient(socket)
+            client = connected
+            activeWsClients.add(connected)
+            connected.start()
             onClientCountChanged(activeWsClients.size)
             Log.i(tag, "New WebSocket client connected. Total clients: ${activeWsClients.size}")
 
-            sendWsTextMessage(socket, "{\"type\":\"connected\",\"msg\":\"Cast Pro Web Receiver Ready\",\"images\":true}")
-            lastGeometryJson?.let { sendWsTextMessage(socket, it) }
+            connected.send(wsTextFrame("{\"type\":\"connected\",\"msg\":\"Cast Pro Web Receiver Ready\",\"images\":true}"), droppable = false)
+            lastGeometryJson?.let { connected.send(wsTextFrame(it), droppable = false) }
 
             val buffer = ByteArray(1024)
             while (isRunning.get() && socket.isConnected && !socket.isClosed) {
@@ -179,9 +249,7 @@ class WebStreamingServer(
         } catch (e: Exception) {
             Log.d(tag, "Client disconnected: ${e.message}")
         } finally {
-            activeWsClients.remove(socket)
-            onClientCountChanged(activeWsClients.size)
-            runCatching { socket.close() }
+            client?.close()
             Log.i(tag, "Client removed. Remaining clients: ${activeWsClients.size}")
         }
     }
@@ -193,7 +261,8 @@ class WebStreamingServer(
             "\"width\":${geometry.width},\"height\":${geometry.height}," +
             "\"rotation\":${geometry.rotationDegrees}}"
         lastGeometryJson = json
-        for (client in activeWsClients) sendWsTextMessage(client, json)
+        val frame = wsTextFrame(json)
+        for (client in activeWsClients) client.send(frame, droppable = false)
     }
 
     /** Sends one complete Cast Pro packet (20-byte header + payload) as a binary frame. */
@@ -209,33 +278,16 @@ class WebStreamingServer(
         System.arraycopy(headerBytes, 0, frame, frameHeader.size, headerBytes.size)
         System.arraycopy(payload, 0, frame, frameHeader.size + headerBytes.size, payload.size)
 
-        for (client in activeWsClients) {
-            try {
-                synchronized(client) {
-                    client.getOutputStream().write(frame)
-                    client.getOutputStream().flush()
-                }
-            } catch (_: Exception) {
-                activeWsClients.remove(client)
-                onClientCountChanged(activeWsClients.size)
-            }
-        }
+        for (client in activeWsClients) client.send(frame, droppable = true)
     }
 
-    private fun sendWsTextMessage(socket: Socket, text: String) {
-        try {
-            val bytes = text.toByteArray()
-            val header = makeWsFrameHeader(0x81.toByte(), bytes.size)
-            synchronized(socket) {
-                val out = socket.getOutputStream()
-                out.write(header)
-                out.write(bytes)
-                out.flush()
-            }
-        } catch (_: Exception) {
-            activeWsClients.remove(socket)
-            onClientCountChanged(activeWsClients.size)
-        }
+    private fun wsTextFrame(text: String): ByteArray {
+        val payload = text.toByteArray()
+        val header = makeWsFrameHeader(0x81.toByte(), payload.size)
+        val frame = ByteArray(header.size + payload.size)
+        System.arraycopy(header, 0, frame, 0, header.size)
+        System.arraycopy(payload, 0, frame, header.size, payload.size)
+        return frame
     }
 
     private fun makeWsFrameHeader(opcode: Byte, len: Int): ByteArray {
@@ -261,9 +313,7 @@ class WebStreamingServer(
 
     fun stop() {
         isRunning.set(false)
-        for (client in activeWsClients) {
-            runCatching { client.close() }
-        }
+        for (client in activeWsClients) client.close()
         activeWsClients.clear()
         onClientCountChanged(0)
         runCatching { httpServerSocket?.close() }
@@ -272,4 +322,6 @@ class WebStreamingServer(
         wsServerSocket = null
         serverScope.cancel()
     }
+
+
 }

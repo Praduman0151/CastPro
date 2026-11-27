@@ -7,6 +7,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.Build
+import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.castpro.core.common.model.GeometryPacket
@@ -77,18 +78,32 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
     fun currentClockOffsetNs(): Long? = clockOffsetNs
 
     /**
-     * The phone stamps heartbeats with its wall clock. Their arrival time lets
-     * the TV subtract the devices' clock skew from the video timestamps, which
-     * is required for a meaningful one-way latency figure.
+     * Both devices stamp packets from their own boot-relative monotonic clock,
+     * but those clocks have different epochs. The TV learns the fixed epoch
+     * difference from heartbeats: (phone mono - TV mono - one way). Adding it
+     * to later local monotonic samples gives a stable one-way latency. Reading
+     * a wall clock at decode time would produce negative or multi-second
+     * spikes whenever either device's clock is adjusted.
      */
     fun noteHeartbeat(senderTimestampNs: Long) {
         if (senderTimestampNs <= 0L) return
-        val receiveNs = System.currentTimeMillis() * 1_000_000L
-        // Do not subtract a fixed "typical" one-way delay: that fabricated a
-        // permanent 2 ms floor in the HUD. The heartbeat gives us only the
-        // clock skew; the remaining difference to a video packet is the live
-        // one-way latency estimate.
-        clockOffsetNs = receiveNs - senderTimestampNs
+        val arrivalMonoNs = SystemClock.elapsedRealtimeNanos()
+        val candidate = senderTimestampNs - arrivalMonoNs - ASSUMED_ONE_WAY_NS
+        val previous = clockOffsetNs
+        clockOffsetNs = when {
+            previous == null -> candidate
+            else -> {
+                val delta = candidate - previous
+                when {
+                    // A clock step (NTP, user change, reboot) must not create
+                    // a bogus latency figure; keep the previous calibration.
+                    delta !in -MAX_OFFSET_STEP_NS..MAX_OFFSET_STEP_NS -> previous
+                    // Gentle smoothing absorbs heartbeat jitter without
+                    // carrying stale readings forward.
+                    else -> previous + delta / CALIBRATION_SMOOTHING
+                }
+            }
+        }
     }
 
     private var onStreamConfig: ((StreamConfigPacket) -> Unit)? = null
@@ -175,6 +190,9 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 refreshNetwork()
+                // A Wi-Fi change can close the discovery socket; the
+                // generation-guarded responder can rebind safely here.
+                udpResponder.start()
             }
 
             override fun onLost(network: Network) {
@@ -246,6 +264,9 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
             },
             onClientConnected = { ip ->
                 retryJob?.cancel()
+                // A new socket may be a different phone with a different
+                // clock; drop the old calibration until the next heartbeat.
+                clockOffsetNs = null
                 _uiState.update {
                     it.copy(
                         isClientConnected = true,
@@ -411,6 +432,12 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     companion object {
+        /** Typical LAN delivery time used to separate clock skew from latency. */
+        private const val ASSUMED_ONE_WAY_NS = 2_000_000L
+        /** Reject a new calibration if a monotonic offset jumped by over 1 s. */
+        private const val MAX_OFFSET_STEP_NS = 1_000_000_000L
+        /** Exponential smoothing factor for heartbeat jitter. */
+        private const val CALIBRATION_SMOOTHING = 4L
         private const val KEY_DISPLAY_MODE = "display_mode"
         private const val KEY_COLOR_FILTER = "color_filter"
         private const val KEY_COMPACT_HUD = "compact_hud"

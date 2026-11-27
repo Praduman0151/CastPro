@@ -67,7 +67,10 @@ object LocalNetwork {
     fun broadcastAddresses(context: Context, network: Network?): List<InetAddress> {
         val manager = context.getSystemService(ConnectivityManager::class.java)
         val properties = network?.let { manager?.getLinkProperties(it) }
-        val addresses = properties?.linkAddresses?.mapNotNull { link ->
+        // Without a selected network, fall back to every active interface
+        // rather than probing only 255.255.255.255, which some routers drop.
+        if (properties == null) return broadcastAddresses()
+        val addresses = properties.linkAddresses.mapNotNull { link ->
             val ipv4 = link.address as? Inet4Address ?: return@mapNotNull null
             val prefix = link.prefixLength
             if (prefix !in 1..30) return@mapNotNull null
@@ -84,8 +87,10 @@ object LocalNetwork {
                     broadcast.toByte()
                 )
             )
-        }?.distinct().orEmpty()
-        return addresses.ifEmpty { listOf(limitedBroadcast()) }
+        }.distinct()
+        // Keep the limited broadcast as well: some routers drop the subnet
+        // broadcast but still forward 255.255.255.255 to the TV.
+        return (addresses + limitedBroadcast()).distinct()
     }
 
     fun isWifiOrEthernet(context: Context): Boolean {

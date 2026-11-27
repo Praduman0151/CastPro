@@ -3,6 +3,9 @@ package com.castpro.phone.viewmodel
 import android.app.Application
 import android.content.Intent
 import android.graphics.Bitmap
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.castpro.core.common.model.*
@@ -55,6 +58,8 @@ class PhoneStreamViewModel(application: Application) : AndroidViewModel(applicat
     private val settingsStore = SettingsStore(application)
     private var qualityApplyJob: Job? = null
     private val nsdHelper = NsdHelper(application)
+    private val connectivityManager = application.getSystemService(ConnectivityManager::class.java)
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private val udpDiscovery = UdpDiscoveryClient(
         context = application,
         onReceiverFound = ::mergeReceiver,
@@ -84,6 +89,7 @@ class PhoneStreamViewModel(application: Application) : AndroidViewModel(applicat
         )
         refreshLocalNetwork()
         startDiscovery()
+        registerNetworkCallback()
 
         viewModelScope.launch {
             CastSessionBus.state.collect { telemetry -> applyTelemetry(telemetry) }
@@ -108,7 +114,9 @@ class PhoneStreamViewModel(application: Application) : AndroidViewModel(applicat
     fun refreshLocalNetwork() {
         val ip = LocalNetwork.activeIpv4(app)
         _uiState.update { state ->
-            val webPort = state.settings.webPort.coerceIn(1024, 65000)
+            // The WebSocket listener runs on webPort + 1, so the HTTP port
+            // must stay below 65535.
+            val webPort = state.settings.webPort.coerceIn(1024, 64999)
             val webUrl = if (ip == null) "" else "http://$ip:$webPort"
             state.copy(
                 localIp = ip ?: "No Wi-Fi / LAN",
@@ -131,8 +139,38 @@ class PhoneStreamViewModel(application: Application) : AndroidViewModel(applicat
             onReceiverFound = ::mergeReceiver,
             onReceiverLost = ::removeReceiverByName
         )
+        // Restart the UDP socket: after a Wi-Fi change the old socket stays
+        // bound to a dead network and can never receive a reply.
+        udpDiscovery.stop()
         udpDiscovery.start()
-        udpDiscovery.refresh()
+    }
+
+    /**
+     * The TV may appear on a new Wi-Fi network while the app is open. mDNS and
+     * the bound UDP socket both go stale on a network change, so discovery is
+     * restarted as soon as a new default network is available.
+     */
+    private fun registerNetworkCallback() {
+        val manager = connectivityManager ?: return
+        if (networkCallback != null) return
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                viewModelScope.launch {
+                    refreshLocalNetwork()
+                    startDiscovery()
+                }
+            }
+
+            override fun onLost(network: Network) {
+                viewModelScope.launch { refreshLocalNetwork() }
+            }
+
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                viewModelScope.launch { refreshLocalNetwork() }
+            }
+        }
+        networkCallback = callback
+        runCatching { manager.registerDefaultNetworkCallback(callback) }
     }
 
     private fun mergeReceiver(receiver: DiscoveredReceiver) {
@@ -211,7 +249,10 @@ class PhoneStreamViewModel(application: Application) : AndroidViewModel(applicat
             )
         }
         if (previous.webPort != newSettings.webPort) refreshLocalNetwork()
-        if (newSettings.autoConnect) {
+        // Only auto-select when nothing is selected. Re-selecting the first TV
+        // on every settings tweak used to switch away from the TV the user had
+        // explicitly picked.
+        if (newSettings.autoConnect && _uiState.value.selectedReceiver == null) {
             _uiState.value.discoveredReceivers.firstOrNull()?.let { selectReceiver(it) }
         }
         if (_uiState.value.status == StreamStatus.STREAMING && streamQualityChanged(previous, newSettings)) {
@@ -419,17 +460,22 @@ class PhoneStreamViewModel(application: Application) : AndroidViewModel(applicat
             val metrics = state.metrics.copy(
                 currentFps = telemetry.currentFps,
                 bitrateMbps = telemetry.bitrateMbps,
-                latencyMs = if (connected) state.metrics.latencyMs else -1f,
+                // There is no TV-to-phone feedback channel, so the phone
+                // cannot report a real end-to-end latency. 0 means "link is
+                // live, number unknown"; -1 means not connected.
+                latencyMs = if (connected) 0f else -1f,
                 isGamingModeActive = state.settings.isGamingMode
             )
             state.copy(
                 status = if (!telemetry.isStreaming) {
-                    if (telemetry.connectionState == SessionConnectionState.IDLE) {
-                        StreamStatus.IDLE
-                    } else {
+                    when (telemetry.connectionState) {
+                        SessionConnectionState.IDLE -> StreamStatus.IDLE
+                        // A failed start/stop must reach the dashboard as an
+                        // error instead of leaving the previous status.
+                        SessionConnectionState.FAILED -> StreamStatus.ERROR
                         // Discovery is not a cast session; keep the dashboard's
                         // own "searching / ready" status.
-                        state.status
+                        else -> state.status
                     }
                 } else {
                     when (telemetry.connectionState) {
@@ -480,6 +526,10 @@ class PhoneStreamViewModel(application: Application) : AndroidViewModel(applicat
 
     override fun onCleared() {
         super.onCleared()
+        networkCallback?.let { callback ->
+            runCatching { connectivityManager?.unregisterNetworkCallback(callback) }
+        }
+        networkCallback = null
         nsdHelper.stop()
         udpDiscovery.stop()
     }

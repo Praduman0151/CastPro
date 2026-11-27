@@ -18,8 +18,10 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
+import android.view.Surface
 import androidx.core.app.NotificationCompat
 import com.castpro.core.common.model.AudioMode
 import com.castpro.core.common.model.SessionConnectionState
@@ -258,6 +260,9 @@ class ScreenCaptureService : Service() {
             val project = mediaProjection ?: return@launch
             val tcp = transport ?: return@launch
             if (!transportConnected) return@launch
+            val previousConfig = currentConfig
+            val previousPacket = currentStreamConfigPacket
+            val previousDpi = previousConfig?.dpi ?: dpi
             val next = StreamConfig(
                 width = width,
                 height = height,
@@ -271,24 +276,16 @@ class ScreenCaptureService : Service() {
             if (currentConfig == next) return@launch
             appendStatus("applyLiveConfig ${width}x$height@${fps}fps ${bitrate / 1_000_000}M $codec")
             Log.i(tag, "Applying live quality: ${next.width}x${next.height}@${next.fps} $codec")
+            var newEncoder: ScreenEncoderBackend? = null
+            var createdDisplay: VirtualDisplay? = null
+            var oldEncoderStopped = false
+            var committed = false
             try {
                 // Prepare the replacement encoder first. If this fails the
                 // current stream keeps running instead of being left with no
                 // encoder and no capture surface.
-                val (enc, inputSurface) = ScreenEncoderFactory.prepare(
-                    config = next,
-                    transport = tcp,
-                    onStats = { stats ->
-                        CastSessionBus.updateStats(
-                            fps = stats.fps,
-                            bitrateMbps = stats.bitrateMbps,
-                            framesSent = stats.framesSent,
-                            bytesSent = stats.bytesSent,
-                            droppedFrames = stats.droppedFrames
-                        )
-                    },
-                    onError = { message -> CastSessionBus.setError(message) }
-                )
+                val (enc, inputSurface) = prepareEncoder(next, tcp)
+                newEncoder = enc
                 synchronized(pipelineLock) {
                     if (!started.get() || !transportConnected ||
                         mediaProjection !== project || transport !== tcp
@@ -301,6 +298,7 @@ class ScreenCaptureService : Service() {
                     // MediaProjection: Android rejects that even after release().
                     // Keep the display alive and swap the encoder's input surface.
                     val oldDisplay = virtualDisplay
+                    oldEncoderStopped = encoder != null
                     encoder?.stop()
                     encoder = enc
 
@@ -319,7 +317,7 @@ class ScreenCaptureService : Service() {
                     sendStreamConfig()
 
                     if (oldDisplay == null) {
-                        virtualDisplay = project.createVirtualDisplay(
+                        val display = project.createVirtualDisplay(
                             "CastPro-Display",
                             width,
                             height,
@@ -329,9 +327,11 @@ class ScreenCaptureService : Service() {
                             null,
                             null
                         )
-                        if (virtualDisplay == null) {
+                        if (display == null) {
                             throw IllegalStateException("Could not create the capture display")
                         }
+                        createdDisplay = display
+                        virtualDisplay = display
                     } else {
                         // Same MediaProjection, but the capture display itself must
                         // be resized. Swapping only the encoder surface left the
@@ -353,15 +353,80 @@ class ScreenCaptureService : Service() {
                         "${width}x${height} · ${fps} fps · ${codec.substringAfterLast('/').uppercase()}"
                     )
                     appendStatus("applyLiveConfig done")
+                    committed = true
                 }
             } catch (e: Exception) {
-                Log.e(tag, "Could not apply live quality change", e)
-                CastSessionBus.setAppliedQuality(null)
-                CastSessionBus.setError("Could not apply quality: ${e.message ?: "encoder error"}")
-                appendStatus("applyLiveConfig failed: ${e.message}")
+                // A failure after the old encoder was released must not leave
+                // the capture display attached to a dead surface: roll back to
+                // the previous config and resize the display back as well.
+                runCatching { if (!committed) newEncoder?.stop() }
+                if (!committed && encoder === newEncoder) encoder = null
+                runCatching { createdDisplay?.release() }
+                if (virtualDisplay === createdDisplay) virtualDisplay = null
+                currentConfig = previousConfig
+                currentStreamConfigPacket = previousPacket
+                val message = e.message ?: "encoder error"
+                CastSessionBus.setError("Could not apply quality: $message")
+                appendStatus("applyLiveConfig failed: $message")
+
+                val restored = if (!committed && oldEncoderStopped &&
+                    virtualDisplay != null && previousConfig != null
+                ) {
+                    val oldDisplay = virtualDisplay!!
+                    runCatching {
+                        val (enc, surface) = prepareEncoder(previousConfig, tcp)
+                        // The failed attempt may already have resized the
+                        // display; restore its original dimensions first.
+                        runCatching {
+                            oldDisplay.resize(previousConfig.width, previousConfig.height, previousDpi)
+                        }.onFailure { Log.w(tag, "Could not restore display size", it) }
+                        oldDisplay.setSurface(surface)
+                        virtualDisplay = oldDisplay
+                        resolutionMonitor?.checkAndNotifyGeometry(force = true)
+                        enc
+                    }.onFailure {
+                        Log.e(tag, "Could not restore the previous quality", it)
+                    }.getOrNull()
+                } else {
+                    null
+                }
+                if (restored != null) {
+                    encoder = restored
+                    sendStreamConfig()
+                    sendHeartbeat(tcp)
+                    restored.requestKeyFrame()
+                    CastSessionBus.setAppliedQuality(
+                        "${previousConfig!!.width}x${previousConfig.height} · " +
+                            "${previousConfig.fps} fps · " +
+                            "${previousConfig.codecMime.substringAfterLast('/').uppercase()}"
+                    )
+                    updateNotification("Quality change failed • previous quality restored")
+                } else {
+                    CastSessionBus.setAppliedQuality(null)
+                    stopStreaming(failure = "Could not apply quality: $message")
+                }
             }
         }
     }
+
+    /** Prepare either the NDK or the Kotlin encoder; the factory starts it. */
+    private fun prepareEncoder(
+        config: StreamConfig,
+        tcp: StreamTransport
+    ): Pair<ScreenEncoderBackend, Surface> = ScreenEncoderFactory.prepare(
+        config = config,
+        transport = tcp,
+        onStats = { stats ->
+            CastSessionBus.updateStats(
+                fps = stats.fps,
+                bitrateMbps = stats.bitrateMbps,
+                framesSent = stats.framesSent,
+                bytesSent = stats.bytesSent,
+                droppedFrames = stats.droppedFrames
+            )
+        },
+        onError = { message -> CastSessionBus.setError(message) }
+    )
 
     private fun startStreamingWithProjection(
         resultCode: Int,
@@ -465,6 +530,12 @@ class ScreenCaptureService : Service() {
                     failStart("Screen recording permission was not granted. Start the projection and accept the dialog.")
                     return@launch
                 }
+                if (generation != sessionGeneration) {
+                    // A newer cast won while the permission dialog was up.
+                    Log.i(tag, "A newer cast session replaced this start; abandoning it")
+                    runCatching { project.stop() }
+                    return@launch
+                }
                 mediaProjection = project
                 project.registerCallback(projectionCallback, Handler(Looper.getMainLooper()))
                 CastSessionBus.start(host.takeIf { it.isNotBlank() })
@@ -514,20 +585,7 @@ class ScreenCaptureService : Service() {
                     startHeartbeatLoop(tcp)
 
                     try {
-                        val (enc, inputSurface) = ScreenEncoderFactory.prepare(
-                            config = config,
-                            transport = tcp,
-                            onStats = { stats ->
-                                CastSessionBus.updateStats(
-                                    fps = stats.fps,
-                                    bitrateMbps = stats.bitrateMbps,
-                                    framesSent = stats.framesSent,
-                                    bytesSent = stats.bytesSent,
-                                    droppedFrames = stats.droppedFrames
-                                )
-                            },
-                            onError = { message -> CastSessionBus.setError(message) }
-                        )
+                        val (enc, inputSurface) = prepareEncoder(config, tcp)
                         encoder = enc
                         virtualDisplay = project.createVirtualDisplay(
                             "CastPro-Display",
@@ -543,6 +601,11 @@ class ScreenCaptureService : Service() {
                             failStart("Could not create a virtual display from the screen projection.")
                             return@launch
                         }
+                        // The TCP connect can win the race against encoder
+                        // creation, leaving onTransportChanged() with no
+                        // encoder to ask for an IDR. Ask now so the TV does
+                        // not wait a whole GOP for its first picture.
+                        if (transportConnected) enc.requestKeyFrame()
                     } catch (e: Exception) {
                         Log.e(tag, "Could not start TV encoder", e)
                         failStart(e.message ?: "Could not start the video encoder.")
@@ -576,8 +639,34 @@ class ScreenCaptureService : Service() {
                 // 3. Geometry/orientation updates for both receivers.
                 val monitor = ScreenResolutionMonitor(this@ScreenCaptureService) { geometry ->
                     currentRotationDegrees = geometry.rotationDegrees
-                    webServer?.broadcastGeometry(geometry)
-                    transport?.let { sendGeometry(it, geometry) }
+                    currentStreamConfigPacket = currentStreamConfigPacket?.copy(
+                        rotationDegrees = geometry.rotationDegrees
+                    )
+                    // Rotation is metadata only: neither encoder resizes its
+                    // frame when the phone turns. Tell each receiver the frame
+                    // it actually receives.
+                    val frame = currentConfig
+                    val videoGeometry = if (frame != null) {
+                        geometry.copy(
+                            width = frame.width,
+                            height = frame.height,
+                            aspectRatio = frame.width.toFloat() / frame.height.coerceAtLeast(1)
+                        )
+                    } else {
+                        geometry
+                    }
+                    // The web mirror is always 16:9; advertising the rotated
+                    // display size made the browser canvas portrait while the
+                    // JPEG frames stayed landscape.
+                    val webGeometry = GeometryPacket(
+                        width = WebMirrorCapture.DEFAULT_WIDTH,
+                        height = WebMirrorCapture.DEFAULT_HEIGHT,
+                        aspectRatio = WebMirrorCapture.DEFAULT_WIDTH.toFloat() /
+                            WebMirrorCapture.DEFAULT_HEIGHT,
+                        rotationDegrees = 0
+                    )
+                    webServer?.broadcastGeometry(webGeometry)
+                    transport?.let { sendGeometry(it, videoGeometry) }
                 }
                 monitor.start()
                 resolutionMonitor = monitor
@@ -686,9 +775,9 @@ class ScreenCaptureService : Service() {
     }
 
     /**
-     * The TV learns the phone/TV clock skew from these packets so its HUD can
-     * report a real one-way latency instead of a value distorted by seconds of
-     * wall-clock difference between the two devices.
+     * The TV learns the epoch difference between the two monotonic clocks from
+     * these packets so its HUD can report a real one-way latency without being
+     * distorted by wall-clock jumps on either device.
      */
     private fun startHeartbeatLoop(activeTransport: StreamTransport) {
         heartbeatJob?.cancel()
@@ -706,7 +795,7 @@ class ScreenCaptureService : Service() {
             type = Constants.TYPE_HEARTBEAT,
             flags = 0,
             sequenceNumber = 0,
-            timestampNano = System.currentTimeMillis() * 1_000_000L,
+            timestampNano = SystemClock.elapsedRealtimeNanos(),
             payloadLength = 0
         )
         active.send(header, ByteArray(0))
@@ -720,7 +809,7 @@ class ScreenCaptureService : Service() {
             type = Constants.TYPE_STREAM_CONFIG,
             flags = 0,
             sequenceNumber = 0,
-            timestampNano = System.currentTimeMillis() * 1_000_000L,
+            timestampNano = SystemClock.elapsedRealtimeNanos(),
             payloadLength = payload.size
         )
         tcp.send(header, payload)
@@ -732,7 +821,7 @@ class ScreenCaptureService : Service() {
             type = Constants.TYPE_GEOMETRY,
             flags = 0,
             sequenceNumber = 0,
-            timestampNano = System.currentTimeMillis() * 1_000_000L,
+            timestampNano = SystemClock.elapsedRealtimeNanos(),
             payloadLength = payload.size
         )
         tcp.send(header, payload)
@@ -744,7 +833,7 @@ class ScreenCaptureService : Service() {
             type = Constants.TYPE_VIDEO_JPEG,
             flags = 0,
             sequenceNumber = jpegSequence.incrementAndGet(),
-            timestampNano = System.currentTimeMillis() * 1_000_000L,
+            timestampNano = SystemClock.elapsedRealtimeNanos(),
             payloadLength = jpeg.size
         )
         web.broadcastPacket(header, jpeg)

@@ -29,7 +29,7 @@ class LowLatencySocketServer(
 ) {
     private val tag = "SocketServer"
     private var serverSocket: ServerSocket? = null
-    @Volatile private var clientSocket: Socket? = null
+    private val registry = ConnectionRegistry<Socket>()
     private val isRunning = AtomicBoolean(false)
     private var serverThread: Thread? = null
 
@@ -60,19 +60,18 @@ class LowLatencySocketServer(
                     val client = serverSocket?.accept() ?: break
                     client.tcpNoDelay = true
                     client.receiveBufferSize = 256 * 1024
-                    clientSocket = client
-                    val clientIp = client.inetAddress.hostAddress ?: "Unknown"
-                    Log.i(tag, "Client connected: $clientIp")
-                    runCatching { onClientConnected(clientIp) }
-
-                    try {
-                        handleClientStream(client.getInputStream())
-                    } catch (e: Exception) {
-                        if (isRunning.get()) Log.w(tag, "Client stream ended: ${e.message}")
-                    } finally {
-                        runCatching { client.close() }
-                        clientSocket = null
-                        runCatching { onClientDisconnected() }
+                    // Accepting a socket is not proof of a real sender. Keep
+                    // the active phone until a candidate sends its first valid
+                    // Cast Pro packet; only then is it promoted. A stray port
+                    // probe can no longer kick the active session offline.
+                    val staleCandidate = registry.register(client)
+                    if (staleCandidate != null && staleCandidate !== client) {
+                        runCatching { staleCandidate.close() }
+                    }
+                    Log.i(tag, "Client socket accepted: ${client.inetAddress.hostAddress ?: "Unknown"}")
+                    Thread({ handleClient(client) }, "CastPro-Client").apply {
+                        isDaemon = true
+                        start()
                     }
                 } catch (e: Exception) {
                     if (isRunning.get()) {
@@ -89,7 +88,25 @@ class LowLatencySocketServer(
         return true
     }
 
-    private fun handleClientStream(inputStream: InputStream) {
+    private fun handleClient(client: Socket) {
+        try {
+            // The phone sends video and a heartbeat every second. If nothing
+            // arrives for this long the link is dead even if TCP never saw a
+            // FIN (for example after a Wi-Fi handover).
+            runCatching { client.soTimeout = CLIENT_READ_TIMEOUT_MS }
+            handleClientStream(client, client.getInputStream())
+        } catch (e: Exception) {
+            if (isRunning.get()) Log.w(tag, "Client stream ended: ${e.message}")
+        } finally {
+            val wasCurrent = registry.remove(client)
+            runCatching { client.close() }
+            // Only the socket that owned the session may flip the UI to
+            // "disconnected"; a stray or replaced socket must not do it.
+            if (wasCurrent) runCatching { onClientDisconnected() }
+        }
+    }
+
+    private fun handleClientStream(client: Socket, inputStream: InputStream) {
         val headerBytes = ByteArray(PacketHeader.HEADER_SIZE)
         val headerBuffer = ByteBuffer.wrap(headerBytes)
 
@@ -101,6 +118,25 @@ class LowLatencySocketServer(
                 Log.w(tag, "Rejecting packet with invalid length ${header.payloadLength}")
                 return
             }
+
+            if (!registry.isCurrent(client)) {
+                // The first well-formed Cast Pro packet is what proves this is
+                // the sender. Until then this socket is only a candidate and
+                // cannot replace the active phone or change receiver state.
+                if (header.type !in VALID_PACKET_TYPES) {
+                    Log.d(tag, "Ignoring non-Cast-Pro packet from candidate ${client.inetAddress.hostAddress}")
+                    return
+                }
+                val evicted = registry.promote(client)
+                if (evicted != null && evicted !== client) runCatching { evicted.close() }
+                if (!registry.isCurrent(client)) return
+                val clientIp = client.inetAddress.hostAddress ?: "Unknown"
+                Log.i(tag, "Client connected: $clientIp")
+                runCatching { onClientConnected(clientIp) }
+            }
+            // A concurrently promoted candidate may have taken over while we
+            // were reading; never dispatch packets from a replaced socket.
+            if (!registry.isCurrent(client)) return
 
             val payload = ByteArray(header.payloadLength)
             if (!readFully(inputStream, payload, header.payloadLength)) return
@@ -162,10 +198,23 @@ class LowLatencySocketServer(
 
     fun stop() {
         isRunning.set(false)
-        runCatching { clientSocket?.close() }
+        runCatching { registry.current?.close() }
+        registry.clear()
         runCatching { serverSocket?.close() }
         serverThread?.interrupt()
-        clientSocket = null
         serverSocket = null
+    }
+
+    private companion object {
+        /** Longer than the phone's 1 s heartbeat, short enough to detect a dead link. */
+        const val CLIENT_READ_TIMEOUT_MS = 15_000
+        private val VALID_PACKET_TYPES = setOf(
+            Constants.TYPE_VIDEO_NAL,
+            Constants.TYPE_AUDIO_DATA,
+            Constants.TYPE_HEARTBEAT,
+            Constants.TYPE_HANDSHAKE,
+            Constants.TYPE_GEOMETRY,
+            Constants.TYPE_STREAM_CONFIG
+        )
     }
 }

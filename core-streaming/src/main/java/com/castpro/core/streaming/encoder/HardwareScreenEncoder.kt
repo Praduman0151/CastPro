@@ -5,12 +5,14 @@ import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
 import com.castpro.core.common.model.StreamConfig
 import com.castpro.core.common.protocol.Constants
 import com.castpro.core.common.protocol.PacketHeader
 import com.castpro.core.streaming.transport.StreamTransport
+import com.castpro.core.streaming.transport.TransportCounters
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -49,16 +51,24 @@ class HardwareScreenEncoder(
     @Volatile
     private var codecConfigBytes: ByteArray? = null
 
-    private var framesSent = 0L
-    private var bytesSent = 0L
-    private var droppedFrames = 0L
+    /** Frames accepted into the transport queue, not yet necessarily written. */
+    private var queuedFrames = 0L
+    private var queuedBytes = 0L
+    private var rejectedFrames = 0L
+    private var baselineWrittenFrames = 0L
+    private var baselineWrittenBytes = 0L
     private var windowFrames = 0
     private var windowBytes = 0L
-    private var windowStartMs = System.currentTimeMillis()
+    private var windowStartMs = SystemClock.elapsedRealtime()
 
     override fun prepare(): Surface {
         val codec = createConfiguredEncoder()
-        val surface = codec.createInputSurface()
+        val surface = try {
+            codec.createInputSurface()
+        } catch (e: Exception) {
+            runCatching { codec.release() }
+            throw e
+        }
         mediaCodec = codec
         inputSurface = surface
         return surface
@@ -118,7 +128,11 @@ class HardwareScreenEncoder(
         val codec = mediaCodec ?: throw IllegalStateException("Encoder not prepared")
         codec.start()
         isRunning.set(true)
-        windowStartMs = System.currentTimeMillis()
+        windowStartMs = SystemClock.elapsedRealtime()
+        transport?.counters?.let {
+            baselineWrittenFrames = it.writtenVideoFrames
+            baselineWrittenBytes = it.writtenVideoBytes
+        }
 
         encoderThread = Thread({
             val bufferInfo = MediaCodec.BufferInfo()
@@ -149,16 +163,28 @@ class HardwareScreenEncoder(
                     encodedData.position(bufferInfo.offset)
                     encodedData.limit(bufferInfo.offset + bufferInfo.size)
 
+                    val payload = ByteArray(bufferInfo.size)
+                    encodedData.get(payload)
+
+                    // Some encoders expose SPS/PPS only as a normal output
+                    // buffer, never through INFO_OUTPUT_FORMAT_CHANGED. Cache
+                    // it so the following IDR is not dropped forever waiting
+                    // for codec config that will never arrive.
+                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                        codecConfigBytes = payload.copyOf()
+                        sendCodecConfig()
+                        codec.releaseOutputBuffer(outputIndex, false)
+                        reportStatsIfNeeded()
+                        continue
+                    }
+
                     val isKeyframe = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
                     val flags = ((if (isKeyframe) Constants.FLAG_KEYFRAME.toInt() else 0) or
                         (if (config.isGamingMode) Constants.FLAG_GAMING_MODE.toInt() else 0)).toByte()
-                    // Wall-clock nanos are comparable across the phone and TV.
-                    // MediaCodec presentation time is relative to encoder start
-                    // and nanoTime() has a different epoch on each device.
-                    val captureTimeNano = System.currentTimeMillis() * 1_000_000L
-
-                    val payload = ByteArray(bufferInfo.size)
-                    encodedData.get(payload)
+                    // Both devices stamp packets from their own monotonic
+                    // clock; the TV learns the fixed skew from heartbeats.
+                    // Wall-clock steps used to produce bogus latency figures.
+                    val captureTimeNano = SystemClock.elapsedRealtimeNanos()
 
                     // A receiver must have SPS/PPS (or VPS/SPS/PPS) before an
                     // IDR. The first connection can race the encoder's
@@ -188,12 +214,12 @@ class HardwareScreenEncoder(
 
                     val delivered = transport?.send(header, payload) ?: true
                     if (delivered) {
-                        framesSent++
-                        bytesSent += payload.size
+                        queuedFrames++
+                        queuedBytes += payload.size
                         windowFrames++
                         windowBytes += payload.size
                     } else {
-                        droppedFrames++
+                        rejectedFrames++
                     }
                     packetListener?.onPacket(header, payload)
                 }
@@ -207,18 +233,26 @@ class HardwareScreenEncoder(
     }
 
     private fun reportStatsIfNeeded() {
-        val now = System.currentTimeMillis()
+        val now = SystemClock.elapsedRealtime()
         val elapsed = now - windowStartMs
         if (elapsed < 1_000L) return
         val fps = ((windowFrames * 1_000L) / elapsed).toInt()
         val bitrate = (windowBytes * 8f) / elapsed / 1_000f
+        // Queue acceptance is not delivery. Report what the sender actually
+        // wrote to the socket; anything still queued (or dropped on a dead
+        // connection) counts as dropped instead of as a sent frame.
+        val counters = transport?.counters?.takeIf { it != TransportCounters() }
+        val writtenFrames = counters?.let { (it.writtenVideoFrames - baselineWrittenFrames).coerceAtLeast(0) }
+            ?: queuedFrames
+        val writtenBytes = counters?.let { (it.writtenVideoBytes - baselineWrittenBytes).coerceAtLeast(0) }
+            ?: queuedBytes
         onStats?.invoke(
             EncoderStats(
                 fps = fps,
                 bitrateMbps = bitrate,
-                framesSent = framesSent,
-                bytesSent = bytesSent,
-                droppedFrames = droppedFrames
+                framesSent = writtenFrames,
+                bytesSent = writtenBytes,
+                droppedFrames = (queuedFrames - writtenFrames).coerceAtLeast(0) + rejectedFrames
             )
         )
         windowFrames = 0
@@ -259,13 +293,11 @@ class HardwareScreenEncoder(
             type = Constants.TYPE_VIDEO_NAL,
             flags = Constants.FLAG_CODEC_CONFIG,
             sequenceNumber = sequenceNumber.incrementAndGet(),
-            timestampNano = System.currentTimeMillis() * 1_000_000L,
+            timestampNano = SystemClock.elapsedRealtimeNanos(),
             payloadLength = data.size
         )
         val delivered = transport?.send(header, data) ?: true
-        if (delivered) {
-            bytesSent += data.size
-        }
+        if (delivered) queuedBytes += data.size
         packetListener?.onPacket(header, data)
     }
 

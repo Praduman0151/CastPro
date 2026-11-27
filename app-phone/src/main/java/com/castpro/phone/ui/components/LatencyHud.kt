@@ -30,7 +30,11 @@ fun LatencyHud(
         MetricItem(label = "FPS", value = "${metrics.currentFps}", highlightColor = GamerNeonGreen)
         MetricItem(
             label = "TV LINK",
-            value = if (metrics.latencyMs < 0f) "—" else "LIVE",
+            value = when {
+                metrics.latencyMs < 0f -> "—"
+                metrics.latencyMs > 0f -> "${metrics.latencyMs.toInt()} ms"
+                else -> "LIVE"
+            },
             highlightColor = if (metrics.latencyMs < 0f) GamerWarning else GamerNeonGreen
         )
         MetricItem(label = "BITRATE", value = "${String.format("%.1f", metrics.bitrateMbps)} Mb/s", highlightColor = GamerAccent)

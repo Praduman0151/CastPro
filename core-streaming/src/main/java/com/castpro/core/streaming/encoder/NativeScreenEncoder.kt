@@ -1,11 +1,13 @@
 package com.castpro.core.streaming.encoder
 
+import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
 import com.castpro.core.common.model.StreamConfig
 import com.castpro.core.common.protocol.Constants
 import com.castpro.core.common.protocol.PacketHeader
 import com.castpro.core.streaming.transport.StreamTransport
+import com.castpro.core.streaming.transport.TransportCounters
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -48,12 +50,15 @@ class NativeScreenEncoder(
     @Volatile private var inputSurface: Surface? = null
     private var codecConfigBytes: ByteArray? = null
     private var pendingKeyframe = false
+    /** Frames accepted into the transport queue, not yet necessarily written. */
     private var frames = 0L
     private var bytes = 0L
     private var dropped = 0L
+    private var baselineWrittenFrames = 0L
+    private var baselineWrittenBytes = 0L
     private var windowFrames = 0
     private var windowBytes = 0L
-    private var windowStart = System.currentTimeMillis()
+    private var windowStart = SystemClock.elapsedRealtime()
 
     override fun prepare(): Surface {
         check(handle == 0L) { "Native encoder already prepared" }
@@ -92,7 +97,11 @@ class NativeScreenEncoder(
         check(handle != 0L) { "Call prepare() before start()" }
         // running is set in prepare() because the native drain thread can emit
         // codec configuration before prepare() returns.
-        windowStart = System.currentTimeMillis()
+        windowStart = SystemClock.elapsedRealtime()
+        transport.counters.let {
+            baselineWrittenFrames = it.writtenVideoFrames
+            baselineWrittenBytes = it.writtenVideoBytes
+        }
     }
 
     @Suppress("unused")
@@ -156,7 +165,7 @@ class NativeScreenEncoder(
             type = Constants.TYPE_VIDEO_NAL,
             flags = flags,
             sequenceNumber = sequence.incrementAndGet(),
-            timestampNano = System.currentTimeMillis() * 1_000_000L,
+            timestampNano = SystemClock.elapsedRealtimeNanos(),
             payloadLength = data.size
         )
         val delivered = runCatching { transport.send(header, data) }
@@ -177,16 +186,23 @@ class NativeScreenEncoder(
     }
 
     private fun reportStats() {
-        val now = System.currentTimeMillis()
+        val now = SystemClock.elapsedRealtime()
         val elapsed = now - windowStart
         if (elapsed < 1_000L) return
+        // Prefer real socket-write counters; fall back to queue acceptance
+        // for transports that do not expose them.
+        val counters = transport.counters.takeIf { it != TransportCounters() }
+        val writtenFrames = counters?.let { (it.writtenVideoFrames - baselineWrittenFrames).coerceAtLeast(0) }
+            ?: frames
+        val writtenBytes = counters?.let { (it.writtenVideoBytes - baselineWrittenBytes).coerceAtLeast(0) }
+            ?: bytes
         onStats?.invoke(
             EncoderStats(
                 fps = (windowFrames * 1_000L / elapsed).toInt(),
                 bitrateMbps = windowBytes * 8f / elapsed / 1_000f,
-                framesSent = frames,
-                bytesSent = bytes,
-                droppedFrames = dropped
+                framesSent = writtenFrames,
+                bytesSent = writtenBytes,
+                droppedFrames = (frames - writtenFrames).coerceAtLeast(0) + dropped
             )
         )
         windowFrames = 0

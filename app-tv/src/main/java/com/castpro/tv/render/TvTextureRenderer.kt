@@ -8,6 +8,7 @@ import android.view.TextureView
 import com.castpro.core.common.model.GeometryPacket
 import com.castpro.core.common.model.LatencyMetrics
 import com.castpro.core.common.model.StreamConfig
+import com.castpro.core.streaming.decoder.DecoderPipeline
 import com.castpro.core.streaming.decoder.HardwareVideoDecoder
 import com.castpro.tv.viewmodel.TvDisplayMode
 import kotlin.math.max
@@ -33,9 +34,10 @@ class TvTextureRenderer(
 ) : TextureView.SurfaceTextureListener {
 
     private val tag = "TvTextureRenderer"
-    private var config: StreamConfig = initialConfig
+    @Volatile private var config: StreamConfig = initialConfig
     private var displayMode: TvDisplayMode = initialDisplayMode
     private var decoder: HardwareVideoDecoder? = null
+    private var pipeline: DecoderPipeline? = null
     private var outputSurface: Surface? = null
     private var renderedFrameUpdates = 0
     var isSurfaceReady = false
@@ -57,7 +59,10 @@ class TvTextureRenderer(
             onMetricsUpdated = onMetricsUpdated,
             onError = onError,
             clockOffsetProvider = clockOffsetProvider
-        ).apply { start() }
+        )
+        // All MediaCodec work (including reconfigure and keyframe buffer
+        // waits) runs on this thread, never on the socket reader.
+        pipeline = DecoderPipeline(decoder!!).apply { start() }
         applyTransform(width, height)
     }
 
@@ -75,7 +80,8 @@ class TvTextureRenderer(
 
     override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
         isSurfaceReady = false
-        decoder?.stop()
+        pipeline?.stop()
+        pipeline = null
         decoder = null
         outputSurface?.release()
         outputSurface = null
@@ -98,9 +104,15 @@ class TvTextureRenderer(
 
     fun onConfig(newConfig: StreamConfig) {
         config = newConfig
-        textureView.surfaceTexture?.let(::sizeDecoderBuffer)
-        decoder?.reconfigure(newConfig)
-        applyTransform()
+        // TextureView and its SurfaceTexture belong to the UI thread, while
+        // this callback comes from the socket reader.
+        textureView.post {
+            textureView.surfaceTexture?.let(::sizeDecoderBuffer)
+            applyTransform()
+        }
+        // The pipeline flushes/rebuilds the decoder on its own thread and
+        // discards frames from the old session until the fresh IDR arrives.
+        pipeline?.submitConfig(newConfig)
     }
 
     fun onFrame(
@@ -112,7 +124,9 @@ class TvTextureRenderer(
         isCodecConfig: Boolean,
         isKeyframe: Boolean
     ) {
-        decoder?.decodeFrame(data, offset, length, timestampNano, isGamingMode, isCodecConfig, isKeyframe)
+        // Socket threads only copy the packet into a bounded queue. Decoding,
+        // codec flushes and reconfigures never block TCP reads.
+        pipeline?.submitFrame(data, offset, length, timestampNano, isGamingMode, isCodecConfig, isKeyframe)
     }
 
     fun onGeometry(geometry: GeometryPacket) {
@@ -123,11 +137,12 @@ class TvTextureRenderer(
     }
 
     fun reset() {
-        decoder?.reset()
+        pipeline?.submitReset()
     }
 
     fun release() {
-        decoder?.stop()
+        pipeline?.stop()
+        pipeline = null
         decoder = null
         outputSurface?.release()
         outputSurface = null

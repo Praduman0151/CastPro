@@ -144,7 +144,14 @@ class GameAudioCapture(
                 Log.e(tag, "Audio read failed", e)
                 break
             }
-            if (bytesRead <= 0) continue
+            if (bytesRead < 0) {
+                // A dead AudioRecord (for example after the projection stopped)
+                // returns an error immediately. Continuing here busy-spun the
+                // capture thread forever and pegged a CPU core.
+                Log.e(tag, "AudioRecord.read failed with $bytesRead; stopping capture")
+                break
+            }
+            if (bytesRead == 0) continue
             if (isMuted.get()) continue
 
             headerBuffer.clear()

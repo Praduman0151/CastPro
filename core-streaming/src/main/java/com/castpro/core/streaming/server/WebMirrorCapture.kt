@@ -22,8 +22,8 @@ import java.nio.ByteBuffer
  */
 class WebMirrorCapture(
     private val projection: MediaProjection,
-    private val width: Int = 1280,
-    private val height: Int = 720,
+    private val width: Int = DEFAULT_WIDTH,
+    private val height: Int = DEFAULT_HEIGHT,
     private val dpi: Int = 160,
     private val shouldCapture: () -> Boolean,
     private val onJpeg: (ByteArray) -> Unit,
@@ -135,5 +135,15 @@ class WebMirrorCapture(
             handlerThread = null
             handler = null
         }
+    }
+
+    companion object {
+        /**
+         * The browser mirror always produces this exact frame, independent of
+         * the phone's display or the native stream configuration. The page
+         * must letterbox this aspect ratio, not the rotated display size.
+         */
+        const val DEFAULT_WIDTH = 1280
+        const val DEFAULT_HEIGHT = 720
     }
 }
