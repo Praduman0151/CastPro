@@ -37,6 +37,11 @@ import com.castpro.core.streaming.encoder.ScreenEncoderFactory
 import com.castpro.core.streaming.encoder.EncoderStats
 import com.castpro.core.streaming.encoder.computeAspectMatchedSize
 import com.castpro.core.streaming.monitor.ScreenResolutionMonitor
+import com.castpro.core.streaming.lifecycle.CleanupStep
+import com.castpro.core.streaming.lifecycle.IndependentCleanup
+import com.castpro.core.streaming.lifecycle.OrientationReconfigurationPolicy
+import com.castpro.core.streaming.lifecycle.VideoStallAction
+import com.castpro.core.streaming.lifecycle.VideoStallPolicy
 import com.castpro.core.streaming.monitor.ScreenWakeLock
 import com.castpro.core.streaming.network.LocalNetwork
 import com.castpro.core.streaming.server.WebMirrorCapture
@@ -627,9 +632,10 @@ class ScreenCaptureService : Service() {
                     // no consent prompt or manual settings action is required.
                     val active = currentConfig
                     if (started.get() && !stopping.get() && transportConnected && active != null) {
-                        val displayLandscape = geometry.width >= geometry.height
-                        val streamLandscape = active.width >= active.height
-                        if (displayLandscape != streamLandscape) {
+                        if (OrientationReconfigurationPolicy.shouldReconfigure(
+                                active.width, active.height, geometry.width, geometry.height
+                            )
+                        ) {
                             Log.i(
                                 tag,
                                 "Display orientation changed to ${geometry.width}x${geometry.height}; " +
@@ -783,11 +789,14 @@ class ScreenCaptureService : Service() {
                 if (!transportConnected || encoder == null) continue
                 val now = System.nanoTime() / 1_000_000L
                 val stalledFor = now - lastVideoProgressAtMs.get()
-                if (stalledFor >= 3_000) {
+                val action = VideoStallPolicy.action(stalledFor)
+                if (action != VideoStallAction.NONE) {
                     runCatching { encoder?.requestKeyFrame() }
                         .onFailure { Log.w(tag, "Stall watchdog could not request IDR", it) }
                 }
-                if (stalledFor >= 8_000 && stallRecoveryRequested.compareAndSet(false, true)) {
+                if (action == VideoStallAction.RECREATE_ENCODER &&
+                    stallRecoveryRequested.compareAndSet(false, true)
+                ) {
                     val active = currentConfig
                     if (active != null) {
                         Log.e(tag, "VIDEO_STALL detected: no delivered frame for ${stalledFor}ms; rebuilding encoder")
@@ -888,41 +897,34 @@ class ScreenCaptureService : Service() {
         val failedHost = currentHost
         val failedName = currentReceiverName
         Log.i(tag, "Stopping screen casting${failure?.let { ": $it" } ?: ""}")
-        // Every teardown action is isolated: one broken resource must never
-        // prevent the VirtualDisplay, codec, projection, or TCP socket closing.
-        runCatching { sendSessionEnd() }
-            .onFailure { Log.w(tag, "Could not send SESSION_END", it) }
-        runCatching { heartbeatJob?.cancel() }
-            .onFailure { Log.w(tag, "Could not cancel heartbeat", it) }
-        runCatching { videoStallWatchdogJob?.cancel() }
-            .onFailure { Log.w(tag, "Could not cancel video stall watchdog", it) }
-        runCatching { webMirror?.stop() }
-            .onFailure { Log.w(tag, "Could not stop web mirror", it) }
-        runCatching { resolutionMonitor?.stop() }
-            .onFailure { Log.w(tag, "Could not stop resolution monitor", it) }
-        runCatching { wakeLock?.release() }
-            .onFailure { Log.w(tag, "Could not release wake lock", it) }
-        runCatching { webServer?.stop() }
-            .onFailure { Log.w(tag, "Could not stop web server", it) }
-        runCatching { audioCapture?.stop() }
-            .onFailure { Log.w(tag, "Could not stop audio capture", it) }
-        // Detach the encoder input surface before releasing the codec.
-        runCatching { virtualDisplay?.release() }
-            .onFailure { Log.w(tag, "Could not release VirtualDisplay", it) }
+        // IndependentCleanup guarantees later resources are released even
+        // when an earlier close/stop implementation throws.
+        IndependentCleanup.run(
+            listOf(
+                CleanupStep("SESSION_END") { sendSessionEnd() },
+                CleanupStep("heartbeat") { heartbeatJob?.cancel() },
+                CleanupStep("video stall watchdog") { videoStallWatchdogJob?.cancel() },
+                CleanupStep("web mirror") { webMirror?.stop() },
+                CleanupStep("resolution monitor") { resolutionMonitor?.stop() },
+                CleanupStep("wake lock") { wakeLock?.release() },
+                CleanupStep("web server") { webServer?.stop() },
+                CleanupStep("audio capture") { audioCapture?.stop() },
+                // Detach the encoder input surface before releasing the codec.
+                CleanupStep("VirtualDisplay") { virtualDisplay?.release() },
+                CleanupStep("encoder") { encoder?.stop() },
+                CleanupStep("MediaProjection callback") {
+                    mediaProjection?.unregisterCallback(projectionCallback)
+                },
+                CleanupStep("MediaProjection") { mediaProjection?.stop() },
+                CleanupStep("transport") { transport?.stop() },
+                CleanupStep("in-game overlay") {
+                    startService(Intent(this, InGameOverlayService::class.java).apply {
+                        action = InGameOverlayService.ACTION_HIDE
+                    })
+                }
+            )
+        ) { resource, error -> Log.w(tag, "Could not release $resource", error) }
         virtualDisplay = null
-        runCatching { encoder?.stop() }
-            .onFailure { Log.w(tag, "Could not stop encoder", it) }
-        runCatching { mediaProjection?.unregisterCallback(projectionCallback) }
-            .onFailure { Log.w(tag, "Could not unregister MediaProjection callback", it) }
-        runCatching { mediaProjection?.stop() }
-            .onFailure { Log.w(tag, "Could not stop MediaProjection", it) }
-        runCatching { transport?.stop() }
-            .onFailure { Log.w(tag, "Could not stop stream transport", it) }
-        runCatching {
-            startService(Intent(this, InGameOverlayService::class.java).apply {
-                action = InGameOverlayService.ACTION_HIDE
-            })
-        }.onFailure { Log.w(tag, "Could not hide in-game overlay", it) }
 
         try {
         } finally {
