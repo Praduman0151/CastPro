@@ -222,7 +222,7 @@ class PhoneStreamViewModel(application: Application) : AndroidViewModel(applicat
     private fun streamQualityChanged(a: StreamingSettings, b: StreamingSettings): Boolean =
         a.resolution != b.resolution || a.framerate != b.framerate ||
             a.bitrate != b.bitrate || a.codec != b.codec ||
-            a.isGamingMode != b.isGamingMode
+            a.isGamingMode != b.isGamingMode || a.useNativeEncoder != b.useNativeEncoder
 
     /** Debounced so tapping through presets does not restart the encoder repeatedly. */
     private fun scheduleLiveQualityApply() {
@@ -243,6 +243,7 @@ class PhoneStreamViewModel(application: Application) : AndroidViewModel(applicat
                 putExtra(ScreenCaptureService.EXTRA_FPS, config.fps)
                 putExtra(ScreenCaptureService.EXTRA_CODEC, config.codecMime)
                 putExtra(ScreenCaptureService.EXTRA_GAMING_MODE, config.isGamingMode)
+                putExtra(ScreenCaptureService.EXTRA_USE_NATIVE_ENCODER, settings.useNativeEncoder)
             }
             app.startForegroundService(intent)
             _uiState.update {
