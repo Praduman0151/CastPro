@@ -606,6 +606,31 @@ class ScreenCaptureService : Service() {
                     currentRotationDegrees = geometry.rotationDegrees
                     webServer?.broadcastGeometry(geometry)
                     transport?.let { sendGeometry(it, geometry) }
+
+                    // Rebuild only when the physical display crosses portrait /
+                    // landscape. The existing MediaProjection remains active;
+                    // no consent prompt or manual settings action is required.
+                    val active = currentConfig
+                    if (started.get() && !stopping.get() && transportConnected && active != null) {
+                        val displayLandscape = geometry.width >= geometry.height
+                        val streamLandscape = active.width >= active.height
+                        if (displayLandscape != streamLandscape) {
+                            Log.i(
+                                tag,
+                                "Display orientation changed to ${geometry.width}x${geometry.height}; " +
+                                    "reconfiguring live capture from ${active.width}x${active.height}"
+                            )
+                            applyLiveConfig(
+                                width = geometry.width,
+                                height = geometry.height,
+                                dpi = active.dpi,
+                                bitrate = active.bitrate,
+                                fps = active.fps,
+                                codec = active.codecMime,
+                                isGamingMode = active.isGamingMode
+                            )
+                        }
+                    }
                 }
                 monitor.start()
                 resolutionMonitor = monitor
