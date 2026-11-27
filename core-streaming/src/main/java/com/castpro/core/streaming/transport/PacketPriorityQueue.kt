@@ -91,6 +91,15 @@ class PacketPriorityQueue(
     private fun pollNowLocked(): ByteArray? =
         critical.pollFirst() ?: control.pollFirst() ?: media.pollFirst()
 
+    /** Drops queued media packets (used on live config change); returns the count dropped. */
+    fun clearMedia(): Int = lock.withLock {
+        val count = media.size
+        dropped += count.toLong()
+        media.clear()
+        notEmpty.signalAll()
+        count
+    }
+
     /** Drops every queued packet (used when the socket dies); returns the count dropped. */
     fun clear(): Int = lock.withLock {
         val count = critical.size + control.size + media.size

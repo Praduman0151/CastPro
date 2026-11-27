@@ -24,6 +24,7 @@ interface StreamTransport {
 
     fun start()
     fun send(header: PacketHeader, payload: ByteArray): Boolean
+    fun clearMediaQueue() {}
     fun stop()
 }
 

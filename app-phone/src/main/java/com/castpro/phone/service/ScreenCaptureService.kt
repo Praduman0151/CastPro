@@ -317,6 +317,9 @@ class ScreenCaptureService : Service() {
                         rotationDegrees = currentRotationDegrees,
                         isGamingMode = isGamingMode
                     )
+                    // Drop stale media packets from the previous encoder before
+                    // sending the new STREAM_CONFIG / CSD / IDR sequence.
+                    tcp.clearMediaQueue()
                     // The TV reconfigures its decoder on this packet, so send it
                     // before the first frame of the new pipeline.
                     sendStreamConfig()
@@ -593,8 +596,7 @@ class ScreenCaptureService : Service() {
 
                     try {
                         val (enc, inputSurface) = prepareEncoder(config, tcp)
-                        encoder = enc
-                        virtualDisplay = project.createVirtualDisplay(
+                        val createdDisplay = project.createVirtualDisplay(
                             "CastPro-Display",
                             streamWidth,
                             streamHeight,
@@ -604,15 +606,20 @@ class ScreenCaptureService : Service() {
                             null,
                             null
                         )
-                        if (virtualDisplay == null) {
+                        if (createdDisplay == null) {
+                            runCatching { enc.stop() }
                             failStart("Could not create a virtual display from the screen projection.")
                             return@launch
                         }
-                        // The TCP connect can win the race against encoder
-                        // creation, leaving onTransportChanged() with no
-                        // encoder to ask for an IDR. Ask now so the TV does
-                        // not wait a whole GOP for its first picture.
-                        if (transportConnected) enc.requestKeyFrame()
+                        synchronized(pipelineLock) {
+                            encoder = enc
+                            virtualDisplay = createdDisplay
+                            // The TCP connect can win the race against encoder
+                            // creation, leaving onTransportChanged() with no
+                            // encoder to ask for an IDR. Ask under pipelineLock
+                            // so connect/encoder assignment cannot miss it.
+                            if (transportConnected) enc.requestKeyFrame()
+                        }
                     } catch (e: Exception) {
                         Log.e(tag, "Could not start TV encoder", e)
                         failStart(e.message ?: "Could not start the video encoder.")

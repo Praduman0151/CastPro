@@ -51,6 +51,8 @@ class HardwareScreenEncoder(
      */
     @Volatile
     private var codecConfigBytes: ByteArray? = null
+    @Volatile
+    private var hasEmittedKeyframe = false
 
     /** Frames accepted into the transport queue, not yet necessarily written. */
     private var queuedFrames = 0L
@@ -185,19 +187,30 @@ class HardwareScreenEncoder(
                     val payload = ByteArray(bufferInfo.size)
                     encodedData.get(payload)
 
+                    val isCodecConfig = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
+                    val isKeyframe = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
+
                     // Some encoders expose SPS/PPS only as a normal output
-                    // buffer, never through INFO_OUTPUT_FORMAT_CHANGED. Cache
-                    // it so the following IDR is not dropped forever waiting
-                    // for codec config that will never arrive.
-                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
-                        codecConfigBytes = payload.copyOf()
-                        sendCodecConfig()
-                        codec.releaseOutputBuffer(outputIndex, false)
-                        reportStatsIfNeeded()
-                        continue
+                    // buffer, never through INFO_OUTPUT_FORMAT_CHANGED, or
+                    // combine CODEC_CONFIG | KEY_FRAME (flags == 3) on the
+                    // first IDR. Extract CSD-only parameter sets so the whole
+                    // IDR is never cached as codecConfigBytes, and still emit
+                    // the IDR frame as FLAG_KEYFRAME when both flags are set.
+                    if (isCodecConfig) {
+                        val parameterSets = AnnexBCodecConfig.extractParameterSets(config.codecMime, payload)
+                        if (parameterSets != null) {
+                            codecConfigBytes = parameterSets
+                            sendCodecConfig()
+                        } else {
+                            Log.w(tag, "Ignoring invalid codec config output buffer: bytes=${payload.size}")
+                        }
+                        if (!isKeyframe) {
+                            codec.releaseOutputBuffer(outputIndex, false)
+                            reportStatsIfNeeded()
+                            continue
+                        }
                     }
 
-                    val isKeyframe = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
                     val flags = ((if (isKeyframe) Constants.FLAG_KEYFRAME.toInt() else 0) or
                         (if (config.isGamingMode) Constants.FLAG_GAMING_MODE.toInt() else 0)).toByte()
                     // Both devices stamp packets from their own monotonic
@@ -217,9 +230,8 @@ class HardwareScreenEncoder(
                     }
 
                     // A receiver must have SPS/PPS (or VPS/SPS/PPS) before an
-                    // IDR. The first connection can race the encoder's
-                    // INFO_OUTPUT_FORMAT_CHANGED callback; never send an IDR
-                    // ahead of the codec config packet.
+                    // IDR, and P-frames must never precede the first IDR after
+                    // startup, reconnect, or config change.
                     if (isKeyframe) {
                         if (codecConfigBytes == null) {
                             Log.w(tag, "Dropping IDR until encoder codec config is available")
@@ -227,7 +239,14 @@ class HardwareScreenEncoder(
                             reportStatsIfNeeded()
                             continue
                         }
-                        sendCodecConfig()
+                        if (!isCodecConfig) {
+                            sendCodecConfig()
+                        }
+                        hasEmittedKeyframe = true
+                    } else if (codecConfigBytes == null || !hasEmittedKeyframe) {
+                        codec.releaseOutputBuffer(outputIndex, false)
+                        reportStatsIfNeeded()
+                        continue
                     }
 
                     // Allocate the video sequence number after any codec-config
@@ -349,6 +368,7 @@ class HardwareScreenEncoder(
 
     /** Ask the codec for an IDR so a reconnected TV can start cleanly. */
     override fun requestKeyFrame() {
+        hasEmittedKeyframe = false
         // The new socket may have joined after MediaCodec emitted its output
         // format. Send the stored parameter sets before the IDR.
         sendCodecConfig()
@@ -378,6 +398,7 @@ class HardwareScreenEncoder(
             inputSurface = null
             encoderThread = null
             codecConfigBytes = null
+            hasEmittedKeyframe = false
         }
     }
 }

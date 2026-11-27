@@ -4,6 +4,7 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
 import com.castpro.core.common.model.StreamConfig
+import com.castpro.core.common.protocol.AnnexBCodecConfig
 import com.castpro.core.common.protocol.Constants
 import com.castpro.core.common.protocol.PacketHeader
 import com.castpro.core.streaming.transport.StreamTransport
@@ -50,6 +51,7 @@ class NativeScreenEncoder(
     @Volatile private var inputSurface: Surface? = null
     private var codecConfigBytes: ByteArray? = null
     private var pendingKeyframe = false
+    private var hasEmittedKeyframe = false
     /** Frames accepted into the transport queue, not yet necessarily written. */
     private var frames = 0L
     private var bytes = 0L
@@ -114,34 +116,41 @@ class NativeScreenEncoder(
             val isCodecConfig = (nativeFlags and 1) != 0
             val isKeyframe = (nativeFlags and 2) != 0
             if (isCodecConfig) {
-                // Cache even if transport.send() fails while the TV is offline.
-                codecConfigBytes = data.copyOf()
-                Log.i(TAG, "Native encoder codec config cached: ${data.size} bytes")
-                if (pendingKeyframe) {
-                    pendingKeyframe = false
-                    requestDeferredKeyframe = true
+                // Extract CSD-only parameter sets so a combined config+IDR buffer
+                // (flags == 3) never caches the entire first IDR in codecConfigBytes.
+                val parameterSets = AnnexBCodecConfig.extractParameterSets(config.codecMime, data)
+                if (parameterSets != null) {
+                    // Cache even if transport.send() fails while the TV is offline.
+                    codecConfigBytes = parameterSets
+                    Log.i(TAG, "Native encoder codec config cached: ${parameterSets.size} bytes")
+                    if (pendingKeyframe) {
+                        pendingKeyframe = false
+                        requestDeferredKeyframe = true
+                    }
+                    sendCodecConfigLocked()
+                } else {
+                    Log.w(TAG, "Ignoring invalid native codec config: bytes=${data.size}")
                 }
                 if (!isKeyframe) {
-                    sendCodecConfigLocked()
                     return@synchronized
                 }
-                // A combined config+IDR buffer already carries its own parameter
-                // sets. Sending the cached copy as well would duplicate CSD and
-                // can desynchronise strict TV decoders, so treat it as the IDR.
             }
 
-            // Never release an IDR before parameter sets exist. The compatibility
-            // encoder drops these too; sending a bare IDR is a known green-screen
-            // trigger on TVs that require SPS/PPS in the format or in-band.
-            if (isKeyframe && codecConfigBytes == null) {
-                pendingKeyframe = true
-                Log.w(TAG, "Dropping native IDR until codec config is available")
+            // Never release an IDR before parameter sets exist, and never emit
+            // P-frames before CSD and at least one IDR have been sent.
+            if (isKeyframe) {
+                if (codecConfigBytes == null) {
+                    pendingKeyframe = true
+                    Log.w(TAG, "Dropping native IDR until codec config is available")
+                    return@synchronized
+                }
+                // Repeat parameter sets immediately before every standalone IDR.
+                if (!isCodecConfig) sendCodecConfigLocked()
+                hasEmittedKeyframe = true
+            } else if (codecConfigBytes == null || !hasEmittedKeyframe) {
+                Log.d(TAG, "Dropping native P-frame until codec config and initial IDR are emitted")
                 return@synchronized
             }
-
-            // Repeat parameter sets immediately before every IDR. This makes
-            // recovery independent of whether the receiver saw the first CSD.
-            if (isKeyframe && !isCodecConfig) sendCodecConfigLocked()
 
             val flags = (
                 (if (isKeyframe) Constants.FLAG_KEYFRAME.toInt() else 0) or
@@ -231,6 +240,7 @@ class NativeScreenEncoder(
     override fun requestKeyFrame() {
         var requestNow = false
         synchronized(outputLock) {
+            hasEmittedKeyframe = false
             if (codecConfigBytes == null) {
                 // A reconnect or live reconfigure can request a keyframe before
                 // the native drain thread has delivered csd-0/1. Defer instead
@@ -265,6 +275,7 @@ class NativeScreenEncoder(
         synchronized(outputLock) {
             codecConfigBytes = null
             pendingKeyframe = false
+            hasEmittedKeyframe = false
         }
         inputSurface = null
     }

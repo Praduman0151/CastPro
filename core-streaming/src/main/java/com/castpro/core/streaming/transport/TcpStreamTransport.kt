@@ -245,6 +245,10 @@ class TcpStreamTransport(
         onConnectionChanged(connected, host, error)
     }
 
+    override fun clearMediaQueue() {
+        packets.clearMedia()
+    }
+
     override fun stop() {
         running.set(false)
         dropCurrentSocket("Stream stopped")
