@@ -11,6 +11,7 @@ import com.castpro.core.common.model.LatencyMetrics
 import com.castpro.core.common.model.StreamConfig
 import com.castpro.core.common.protocol.AnnexBCodecConfig
 import com.castpro.core.streaming.decoder.HardwareVideoDecoder
+import com.castpro.core.streaming.decoder.VideoDecoderController
 import com.castpro.tv.viewmodel.TvDisplayMode
 import kotlin.math.min
 
@@ -32,7 +33,8 @@ class TvTextureRenderer(
     private val clockOffsetProvider: () -> Long? = { null },
     private val onFrameRendered: () -> Unit = {},
     private val onVideoSizeChanged: (Int, Int) -> Unit = { _, _ -> },
-    private val forceSoftwareAvc: Boolean = false
+    private val forceSoftwareAvc: Boolean = false,
+    private val decoderFactory: ((StreamConfig, Surface, ByteArray?) -> VideoDecoderController)? = null
 ) : TextureView.SurfaceTextureListener {
 
     private val tag = "TvTextureRenderer"
@@ -40,7 +42,7 @@ class TvTextureRenderer(
     private var decodedWidth: Int = initialConfig.width
     private var decodedHeight: Int = initialConfig.height
     private var displayMode: TvDisplayMode = initialDisplayMode
-    private var decoder: HardwareVideoDecoder? = null
+    private var decoder: VideoDecoderController? = null
     private var outputSurface: Surface? = null
     // Kept across SurfaceTexture destruction/recreation for this TCP session.
     private var sessionCodecConfig: ByteArray? = null
@@ -58,7 +60,19 @@ class TvTextureRenderer(
         val surface = Surface(surfaceTexture)
         outputSurface = surface
         Log.d(tag, "TEXTURE_SURFACE created width=$width height=$height valid=${surface.isValid} texture=${surfaceTexture.hashCode()}")
-        decoder = HardwareVideoDecoder(
+        createDecoder(surface).apply { start() }.also { decoder = it }
+        if (sessionCodecConfig != null) {
+            Log.i(tag, "Recreated decoder seeded with cached session CSD (${sessionCodecConfig!!.size} bytes)")
+        } else {
+            Log.w(tag, "Surface recreated without cached CSD; waiting for inline parameter sets/IDR")
+        }
+        // The current TCP protocol has no receiver-to-sender keyframe request.
+        // The sender prepends parameter sets to sync frames when supported.
+        applyTransform(width, height)
+    }
+
+    private fun createDecoder(surface: Surface): VideoDecoderController =
+        decoderFactory?.invoke(config, surface, sessionCodecConfig?.copyOf()) ?: HardwareVideoDecoder(
             initialConfig = config,
             surface = surface,
             initialScalingMode = MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT,
@@ -77,16 +91,7 @@ class TvTextureRenderer(
             clockOffsetProvider = clockOffsetProvider,
             initialCodecConfig = sessionCodecConfig?.copyOf(),
             diagnosticDecoderName = if (forceSoftwareAvc) "c2.android.avc.decoder" else null
-        ).apply { start() }
-        if (sessionCodecConfig != null) {
-            Log.i(tag, "Recreated decoder seeded with cached session CSD (${sessionCodecConfig!!.size} bytes)")
-        } else {
-            Log.w(tag, "Surface recreated without cached CSD; waiting for inline parameter sets/IDR")
-        }
-        // The current TCP protocol has no receiver-to-sender keyframe request.
-        // The sender prepends parameter sets to sync frames when supported.
-        applyTransform(width, height)
-    }
+        )
 
     override fun onSurfaceTextureSizeChanged(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
         applyTransform(width, height)
