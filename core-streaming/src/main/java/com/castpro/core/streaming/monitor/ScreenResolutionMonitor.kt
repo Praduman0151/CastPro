@@ -3,6 +3,8 @@ package com.castpro.core.streaming.monitor
 import android.content.Context
 import android.hardware.display.DisplayManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.Display
 import android.view.OrientationEventListener
@@ -15,26 +17,55 @@ class ScreenResolutionMonitor(
     private val onGeometryChanged: (GeometryPacket) -> Unit
 ) {
     private val tag = "ScreenResolutionMonitor"
+
+    companion object {
+        const val ORIENTATION_DEBOUNCE_MS = 250L
+    }
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    private val displayManager = context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+    private val handler = Handler(Looper.getMainLooper())
+    private var started = false
+    private val debouncedCheck = Runnable { checkAndNotifyGeometry() }
     private var lastWidth = 0
     private var lastHeight = 0
     private var lastRotation = -1
 
-    private val orientationListener = object : OrientationEventListener(context) {
-        override fun onOrientationChanged(orientation: Int) {
-            checkAndNotifyGeometry()
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) = Unit
+        override fun onDisplayRemoved(displayId: Int) = Unit
+        override fun onDisplayChanged(displayId: Int) {
+            if (displayId == Display.DEFAULT_DISPLAY) scheduleGeometryCheck()
         }
     }
 
-    fun start() {
-        if (orientationListener.canDetectOrientation()) {
-            orientationListener.enable()
+    private val orientationListener = object : OrientationEventListener(context) {
+        override fun onOrientationChanged(orientation: Int) {
+            scheduleGeometryCheck()
         }
+    }
+
+    @Synchronized
+    fun start() {
+        if (started) return
+        started = true
+        displayManager.registerDisplayListener(displayListener, handler)
+        if (orientationListener.canDetectOrientation()) orientationListener.enable()
         checkAndNotifyGeometry(force = true)
     }
 
+    @Synchronized
     fun stop() {
+        if (!started) return
+        started = false
+        handler.removeCallbacks(debouncedCheck)
         orientationListener.disable()
+        runCatching { displayManager.unregisterDisplayListener(displayListener) }
+            .onFailure { Log.w(tag, "Could not unregister display listener", it) }
+    }
+
+    private fun scheduleGeometryCheck() {
+        handler.removeCallbacks(debouncedCheck)
+        handler.postDelayed(debouncedCheck, ORIENTATION_DEBOUNCE_MS)
     }
 
     fun checkAndNotifyGeometry(force: Boolean = false) {
