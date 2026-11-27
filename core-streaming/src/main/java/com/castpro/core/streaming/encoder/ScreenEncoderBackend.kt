@@ -38,12 +38,14 @@ object ScreenEncoderFactory {
                 NativeScreenEncoder(config, transport, onStats, onError)
             }.getOrNull()
             if (native != null) {
+                var nativeSurface: Surface? = null
                 try {
-                    val surface = native.prepare()
+                    nativeSurface = native.prepare()
                     native.start()
                     Log.w(TAG, "EXPERIMENTAL opt-in: NativeScreenEncoder selected over TCP")
-                    return native to surface
+                    return native to nativeSurface
                 } catch (error: Throwable) {
+                    runCatching { nativeSurface?.release() }
                     runCatching { native.stop() }
                     Log.e(TAG, "Opt-in native encoder failed; falling back to hardware", error)
                     onError("Native encoder unavailable; using hardware encoder: ${error.message}")
