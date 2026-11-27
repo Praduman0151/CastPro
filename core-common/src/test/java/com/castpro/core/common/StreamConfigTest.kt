@@ -14,7 +14,7 @@ class StreamConfigTest {
         val config = StreamConfig(isGamingMode = true, fps = 60, bitrate = Constants.GAMING_BITRATE_BPS)
         assertTrue(config.isGamingMode)
         assertEquals(60, config.fps)
-        assertEquals(12_000_000, config.bitrate)
+        assertEquals(8_000_000, config.bitrate)
         assertEquals(1920, config.width)
         assertEquals(1080, config.height)
     }
