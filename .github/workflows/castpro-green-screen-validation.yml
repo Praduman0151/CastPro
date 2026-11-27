@@ -36,6 +36,31 @@ jobs:
       - name: Run all unit tests
         run: ./gradlew test
 
+      - name: Report exact unit test totals
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import glob
+          import xml.etree.ElementTree as ET
+
+          totals = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
+          reports = glob.glob("**/build/test-results/test*/TEST-*.xml", recursive=True)
+          for report in reports:
+              root = ET.parse(report).getroot()
+              for key in totals:
+                  totals[key] += int(root.attrib.get(key, 0))
+
+          passed = totals["tests"] - totals["failures"] - totals["errors"] - totals["skipped"]
+          failed = totals["failures"] + totals["errors"]
+          print(
+              "UNIT_TEST_TOTALS "
+              f"tests={totals['tests']} passed={passed} "
+              f"failed={failed} skipped={totals['skipped']}"
+          )
+          if not reports:
+              raise SystemExit("No Gradle JUnit XML test reports were found")
+          PY
+
       - name: Build Phone and TV debug APKs
         run: ./gradlew :app-phone:assembleDebug :app-tv:assembleDebug
 
