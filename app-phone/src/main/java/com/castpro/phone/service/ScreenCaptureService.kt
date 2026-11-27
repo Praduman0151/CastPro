@@ -316,8 +316,8 @@ class ScreenCaptureService : Service() {
                             droppedFrames = stats.droppedFrames
                         )
                     },
-                    onError = { message -> CastSessionBus.setError(message) }
-                useNativeEncoder = useNativeEncoder,
+                    onError = { message -> CastSessionBus.setError(message) },
+                useNativeEncoder = useNativeEncoder
                 )
                 synchronized(pipelineLock) {
                     if (!started.get() || !transportConnected ||
@@ -559,8 +559,8 @@ class ScreenCaptureService : Service() {
                                     droppedFrames = stats.droppedFrames
                                 )
                             },
-                            onError = { message -> CastSessionBus.setError(message) }
-                        useNativeEncoder = useNativeEncoder,
+                            onError = { message -> CastSessionBus.setError(message) },
+                        useNativeEncoder = useNativeEncoder
                         )
                         encoder = enc
                         virtualDisplay = project.createVirtualDisplay(
