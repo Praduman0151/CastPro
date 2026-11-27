@@ -72,8 +72,8 @@ fun TvReceiverScreen(
         val density = LocalDensity.current
         val containerW = constraints.maxWidth.toFloat()
         val containerH = constraints.maxHeight.toFloat()
-        val videoWidth = state.streamConfig.width
-        val videoHeight = state.streamConfig.height
+        val videoWidth = state.videoWidth.takeIf { it > 0 } ?: state.streamConfig.width
+        val videoHeight = state.videoHeight.takeIf { it > 0 } ?: state.streamConfig.height
         val videoAspect = if (videoWidth > 0 && videoHeight > 0) videoWidth.toFloat() / videoHeight.toFloat() else 16f / 9f
         val containerAspect = if (containerH > 0f) containerW / containerH else 16f / 9f
         val (targetW, targetH) = when (state.displayMode) {
@@ -100,13 +100,11 @@ fun TvReceiverScreen(
                     val h = targetH.toInt().coerceAtLeast(1)
                     val lp = (view.layoutParams as? FrameLayout.LayoutParams)
                         ?: FrameLayout.LayoutParams(w, h, Gravity.CENTER)
-                    if (lp.width != w || lp.height != h) {
-                        lp.width = w
-                        lp.height = h
-                        lp.gravity = Gravity.CENTER
-                        view.layoutParams = lp
-                        view.requestLayout()
-                    }
+                    lp.width = w
+                    lp.height = h
+                    lp.gravity = Gravity.CENTER
+                    view.layoutParams = lp
+                    view.requestLayout()
                 },
                 modifier = videoModifier
             )
@@ -441,7 +439,7 @@ private fun TvCastSettingsPanel(
         )
         Text(
             text = "Stream shape ${String.format("%.2f", settingsAspect)}:1 · " +
-                "Stretch fills every pixel, Fit keeps black bars, Fill crops the edges.",
+                "Fit preserves the whole frame; Full and Stretch fill the TV without cropping.",
             color = Color.Gray,
             fontSize = 11.sp
         )

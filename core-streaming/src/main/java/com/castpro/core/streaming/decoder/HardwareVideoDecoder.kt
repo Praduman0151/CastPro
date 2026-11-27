@@ -22,6 +22,7 @@ class HardwareVideoDecoder(
     private val surface: Surface,
     initialScalingMode: Int = MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT,
     private val onMetricsUpdated: (LatencyMetrics) -> Unit,
+    private val onVideoSizeChanged: (Int, Int) -> Unit = { _, _ -> },
     private val onError: (String) -> Unit = {},
     private val clockOffsetProvider: () -> Long? = { null },
     initialCodecConfig: ByteArray? = null,
@@ -436,16 +437,25 @@ class HardwareVideoDecoder(
             val outputIndex = codec.dequeueOutputBuffer(info, 0)
             if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                 val format = codec.outputFormat
-                decodedWidth = runCatching { format.getInteger(MediaFormat.KEY_WIDTH) }.getOrDefault(config.width)
-                decodedHeight = runCatching { format.getInteger(MediaFormat.KEY_HEIGHT) }.getOrDefault(config.height)
+                val formatWidth = runCatching { format.getInteger(MediaFormat.KEY_WIDTH) }.getOrDefault(config.width)
+                val formatHeight = runCatching { format.getInteger(MediaFormat.KEY_HEIGHT) }.getOrDefault(config.height)
+                fun hasKey(key: String): Boolean = runCatching { format.containsKey(key) }.getOrDefault(false)
+                fun intValueOr(key: String, fallback: Int): Int = runCatching {
+                    if (hasKey(key)) format.getInteger(key) else fallback
+                }.getOrDefault(fallback)
+                val hasCrop = hasKey("crop-left") && hasKey("crop-right") &&
+                    hasKey("crop-top") && hasKey("crop-bottom")
+                val cropLeft = intValueOr("crop-left", 0)
+                val cropRight = intValueOr("crop-right", formatWidth - 1)
+                val cropTop = intValueOr("crop-top", 0)
+                val cropBottom = intValueOr("crop-bottom", formatHeight - 1)
+                decodedWidth = if (hasCrop && cropRight >= cropLeft) cropRight - cropLeft + 1 else formatWidth
+                decodedHeight = if (hasCrop && cropBottom >= cropTop) cropBottom - cropTop + 1 else formatHeight
                 val mime = runCatching { format.getString(MediaFormat.KEY_MIME) }.getOrDefault(config.codecMime) ?: config.codecMime
                 val profile = runCatching { format.getInteger(MediaFormat.KEY_PROFILE) }.getOrDefault(-1)
                 val profileLabel = profileName(mime, profile)
                 decodedCodecLabel = codecDisplayName(mime) + if (profileLabel.isBlank()) "" else " $profileLabel"
-                val cropLeft = runCatching { format.getInteger("crop-left") }.getOrDefault(0)
-                val cropRight = runCatching { format.getInteger("crop-right") }.getOrDefault(decodedWidth - 1)
-                val cropTop = runCatching { format.getInteger("crop-top") }.getOrDefault(0)
-                val cropBottom = runCatching { format.getInteger("crop-bottom") }.getOrDefault(decodedHeight - 1)
+                onVideoSizeChanged(decodedWidth, decodedHeight)
                 fun intValue(key: String): Int = runCatching {
                     if (format.containsKey(key)) format.getInteger(key) else -1
                 }.getOrDefault(-1)

@@ -36,6 +36,9 @@ data class TvUiState(
     val pairingUri: String = "",
     val qrCodeBitmap: Bitmap? = null,
     val streamConfig: StreamConfig = StreamConfig(),
+    /** Effective dimensions reported by MediaCodec after applying crop metadata. */
+    val videoWidth: Int = 0,
+    val videoHeight: Int = 0,
     val aspectRatio: Float = 16f / 9f,
     val metrics: LatencyMetrics = LatencyMetrics(),
     /** TCP is connected, but video may not have arrived yet. */
@@ -322,6 +325,8 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
         _uiState.update {
             it.copy(
                 streamConfig = config,
+                videoWidth = packet.width,
+                videoHeight = packet.height,
                 aspectRatio = if (packet.height > 0) packet.width.toFloat() / packet.height else 16f / 9f,
                 connectionError = null
             )
@@ -331,6 +336,12 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
 
     fun updateMetrics(metrics: LatencyMetrics) {
         _uiState.update { it.copy(metrics = metrics) }
+    }
+
+    /** Publish the effective decoded frame size, including codec crop metadata. */
+    fun updateVideoSize(width: Int, height: Int) {
+        if (width <= 0 || height <= 0) return
+        _uiState.update { it.copy(videoWidth = width, videoHeight = height) }
     }
 
     /**

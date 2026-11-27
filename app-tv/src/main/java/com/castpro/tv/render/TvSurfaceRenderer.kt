@@ -22,6 +22,7 @@ class TvSurfaceRenderer(
     initialDisplayMode: TvDisplayMode,
     private val forceSoftwareAvc: Boolean = false,
     private val onMetricsUpdated: (LatencyMetrics) -> Unit,
+    private val onVideoSizeChanged: (Int, Int) -> Unit = { _, _ -> },
     private val onError: (String) -> Unit = {},
     private val clockOffsetProvider: () -> Long? = { null },
     private val onFrameRendered: () -> Unit = {}
@@ -75,6 +76,12 @@ class TvSurfaceRenderer(
                     reportedFirstFrame = true
                     Log.i(tag, "SURFACE_VIEW first decoder output metrics received")
                     onFrameRendered()
+                }
+            },
+            onVideoSizeChanged = { width, height ->
+                surfaceView.post {
+                    runCatching { surfaceView.holder.setFixedSize(width, height) }
+                    onVideoSizeChanged(width, height)
                 }
             },
             onError = onError,

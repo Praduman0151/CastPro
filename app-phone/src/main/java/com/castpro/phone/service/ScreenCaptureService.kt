@@ -20,6 +20,8 @@ import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
 import android.util.Log
+import android.util.DisplayMetrics
+import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import com.castpro.core.common.model.AudioMode
 import com.castpro.core.common.model.SessionConnectionState
@@ -32,6 +34,7 @@ import com.castpro.core.common.protocol.StreamConfigPacket
 import com.castpro.core.streaming.audio.GameAudioCapture
 import com.castpro.core.streaming.encoder.ScreenEncoderBackend
 import com.castpro.core.streaming.encoder.ScreenEncoderFactory
+import com.castpro.core.streaming.encoder.computeAspectMatchedSize
 import com.castpro.core.streaming.monitor.ScreenResolutionMonitor
 import com.castpro.core.streaming.monitor.ScreenWakeLock
 import com.castpro.core.streaming.network.LocalNetwork
@@ -131,15 +134,20 @@ class ScreenCaptureService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun alignStreamDimension(value: Int): Int =
-        ((value.coerceAtLeast(16) + 15) / 16) * 16
-
+    /**
+     * Use the display's live orientation/aspect ratio rather than forcing a
+     * 16:9 virtual display, which makes Android bake letterbox bars into frames.
+     */
     private fun cappedStreamDimensions(width: Int, height: Int): Pair<Int, Int> {
-        val safeWidth = width.coerceAtLeast(16)
-        val safeHeight = height.coerceAtLeast(16)
-        val scale = minOf(1f, 1920f / safeWidth, 1080f / safeHeight)
-        return alignStreamDimension((safeWidth * scale).toInt()).coerceAtMost(1920) to
-            alignStreamDimension((safeHeight * scale).toInt()).coerceAtMost(1080)
+        val metrics = DisplayMetrics()
+        val measured = runCatching {
+            val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay.getRealMetrics(metrics)
+        }.isSuccess
+        val displayWidth = if (measured && metrics.widthPixels > 0) metrics.widthPixels else width
+        val displayHeight = if (measured && metrics.heightPixels > 0) metrics.heightPixels else height
+        return computeAspectMatchedSize(displayWidth, displayHeight)
     }
 
     private fun cappedFps(value: Int) = value.coerceIn(1, 60)

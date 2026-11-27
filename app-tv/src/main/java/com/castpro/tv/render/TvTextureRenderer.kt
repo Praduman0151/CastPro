@@ -12,7 +12,6 @@ import com.castpro.core.common.model.StreamConfig
 import com.castpro.core.common.protocol.AnnexBCodecConfig
 import com.castpro.core.streaming.decoder.HardwareVideoDecoder
 import com.castpro.tv.viewmodel.TvDisplayMode
-import kotlin.math.max
 import kotlin.math.min
 
 /**
@@ -22,7 +21,7 @@ import kotlin.math.min
  * and SCALE_TO_FIT_WITH_CROPPING crops. For STRETCH we therefore give the
  * decoder a SurfaceTexture sized to the encoded frame (no decoder scaling),
  * then map that whole texture to the whole view with independent X/Y scales.
- * FIT and FILL use a uniform scale inside the same full-window view.
+ * FIT uses a uniform aspect-preserving scale; FULL/STRETCH fill without crop.
  */
 class TvTextureRenderer(
     private val textureView: TextureView,
@@ -32,11 +31,14 @@ class TvTextureRenderer(
     private val onError: (String) -> Unit = {},
     private val clockOffsetProvider: () -> Long? = { null },
     private val onFrameRendered: () -> Unit = {},
+    private val onVideoSizeChanged: (Int, Int) -> Unit = { _, _ -> },
     private val forceSoftwareAvc: Boolean = false
 ) : TextureView.SurfaceTextureListener {
 
     private val tag = "TvTextureRenderer"
     private var config: StreamConfig = initialConfig
+    private var decodedWidth: Int = initialConfig.width
+    private var decodedHeight: Int = initialConfig.height
     private var displayMode: TvDisplayMode = initialDisplayMode
     private var decoder: HardwareVideoDecoder? = null
     private var outputSurface: Surface? = null
@@ -61,6 +63,16 @@ class TvTextureRenderer(
             surface = surface,
             initialScalingMode = MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT,
             onMetricsUpdated = onMetricsUpdated,
+            onVideoSizeChanged = { width, height ->
+                if (width > 0 && height > 0) {
+                    textureView.post {
+                        decodedWidth = width
+                        decodedHeight = height
+                        applyTransform()
+                        onVideoSizeChanged(width, height)
+                    }
+                }
+            },
             onError = onError,
             clockOffsetProvider = clockOffsetProvider,
             initialCodecConfig = sessionCodecConfig?.copyOf(),
@@ -118,6 +130,8 @@ class TvTextureRenderer(
         // A new StreamConfig starts a new codec session; never reuse stale CSD.
         sessionCodecConfig = null
         config = newConfig
+        decodedWidth = newConfig.width
+        decodedHeight = newConfig.height
         textureView.surfaceTexture?.let(::sizeDecoderBuffer)
         decoder?.reconfigure(newConfig)
         applyTransform()
@@ -171,8 +185,8 @@ class TvTextureRenderer(
 
     private fun applyTransform(viewWidth: Int = textureView.width, viewHeight: Int = textureView.height) {
         if (viewWidth <= 0 || viewHeight <= 0) return
-        val videoWidth = config.width.coerceAtLeast(1).toFloat()
-        val videoHeight = config.height.coerceAtLeast(1).toFloat()
+        val videoWidth = decodedWidth.coerceAtLeast(1).toFloat()
+        val videoHeight = decodedHeight.coerceAtLeast(1).toFloat()
 
         val scaleX: Float
         val scaleY: Float
@@ -180,7 +194,7 @@ class TvTextureRenderer(
         val translateY: Float
 
         when (displayMode) {
-            TvDisplayMode.STRETCH -> {
+            TvDisplayMode.STRETCH, TvDisplayMode.FILL -> {
                 // Independent axes: every decoded pixel maps to the full panel.
                 // No crop, no letterbox, centred by construction.
                 scaleX = viewWidth / videoWidth
@@ -190,13 +204,6 @@ class TvTextureRenderer(
             }
             TvDisplayMode.FIT -> {
                 val scale = min(viewWidth / videoWidth, viewHeight / videoHeight)
-                scaleX = scale
-                scaleY = scale
-                translateX = (viewWidth - videoWidth * scale) / 2f
-                translateY = (viewHeight - videoHeight * scale) / 2f
-            }
-            TvDisplayMode.FILL -> {
-                val scale = max(viewWidth / videoWidth, viewHeight / videoHeight)
                 scaleX = scale
                 scaleY = scale
                 translateX = (viewWidth - videoWidth * scale) / 2f

@@ -99,6 +99,9 @@ class TvMainActivity : ComponentActivity() {
                         onMetricsUpdated = { metrics ->
                             runOnUiThread { viewModel.updateMetrics(metrics) }
                         },
+                        onVideoSizeChanged = { width, height ->
+                            runOnUiThread { viewModel.updateVideoSize(width, height) }
+                        },
                         onError = { message ->
                             // Surface-level codec errors are non-fatal; keep
                             // the receiver usable but show what happened.
@@ -128,6 +131,9 @@ class TvMainActivity : ComponentActivity() {
                         forceSoftwareAvc = diagForceSoftware,
                         onMetricsUpdated = { metrics ->
                             runOnUiThread { viewModel.updateMetrics(metrics) }
+                        },
+                        onVideoSizeChanged = { width, height ->
+                            runOnUiThread { viewModel.updateVideoSize(width, height) }
                         },
                         onError = { message ->
                             android.util.Log.e("TvMainActivity", message)
