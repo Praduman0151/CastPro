@@ -40,6 +40,9 @@ class TvSurfaceRenderer(
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         if (released) return
+        decoder?.stop()
+        decoder = null
+        reportedFirstFrame = false
         val surface = holder.surface
         Log.d(tag, "SURFACE_VIEW created valid=${surface.isValid} frame=${holder.surfaceFrame}")
         if (!surface.isValid) {
@@ -57,6 +60,7 @@ class TvSurfaceRenderer(
         Log.d(tag, "SURFACE_VIEW destroyed")
         decoder?.stop()
         decoder = null
+        reportedFirstFrame = false
     }
 
     private fun createDecoder(surface: Surface): HardwareVideoDecoder =
@@ -86,7 +90,9 @@ class TvSurfaceRenderer(
 
     fun onConfig(newConfig: StreamConfig) {
         sessionCodecConfig = null
+        reportedFirstFrame = false
         config = newConfig
+        decoder?.resetSession()
         decoder?.reconfigure(newConfig)
         Log.d(tag, "SURFACE_VIEW stream config=${newConfig.codecMime} ${newConfig.width}x${newConfig.height}")
     }
@@ -100,6 +106,7 @@ class TvSurfaceRenderer(
         isCodecConfig: Boolean,
         isKeyframe: Boolean
     ) {
+        if (released) return
         if (isCodecConfig) {
             val validated = AnnexBCodecConfig.extractParameterSets(config.codecMime, data, offset, length)
             if (validated != null) {
@@ -117,7 +124,9 @@ class TvSurfaceRenderer(
 
     fun onSessionDisconnected() {
         sessionCodecConfig = null
-        Log.d(tag, "SURFACE_VIEW cleared session CSD")
+        reportedFirstFrame = false
+        decoder?.resetSession()
+        Log.d(tag, "SURFACE_VIEW cleared session CSD and reset decoder gate")
     }
 
     fun onGeometry(geometry: GeometryPacket) {

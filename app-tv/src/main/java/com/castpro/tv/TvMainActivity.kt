@@ -37,7 +37,7 @@ class TvMainActivity : ComponentActivity() {
         installTvCrashHandler(this)
         // Runtime diagnostic switches: defaults preserve the production path.
         diagForceSoftware = intent.getBooleanExtra("diag_force_sw", false)
-        diagUseSurfaceView = intent.getBooleanExtra("diag_use_surface_view", false)
+        diagUseSurfaceView = intent.getBooleanExtra("diag_use_surface_view", true)
         android.util.Log.i(
             "CastProDiagnostics",
             "diag_force_sw=$diagForceSoftware diag_use_surface_view=$diagUseSurfaceView"

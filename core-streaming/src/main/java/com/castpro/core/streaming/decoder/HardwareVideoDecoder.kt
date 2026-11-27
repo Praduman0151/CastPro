@@ -74,6 +74,19 @@ class HardwareVideoDecoder(
         }
     }
 
+    /**
+     * A new TCP session must not inherit the previous peer's codec-config or
+     * keyframe gate, even when the resolution and MIME type are unchanged.
+     */
+    fun resetSession() {
+        synchronized(lock) {
+            cachedCodecConfig = null
+            decodeGate.resetForReconfigure()
+            lastInputTimestampNano = 0L
+            lastInputGamingMode = false
+        }
+    }
+
     fun reconfigure(newConfig: StreamConfig) {
         synchronized(lock) {
             if (newConfig.codecMime == config.codecMime &&
