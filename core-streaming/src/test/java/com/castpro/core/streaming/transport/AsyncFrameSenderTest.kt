@@ -88,7 +88,8 @@ class AsyncFrameSenderTest {
             onStats = { delivered, bytes ->
                 frameStats += delivered to bytes
                 frameStatsReady.countDown()
-            }
+            },
+            clockMs = { 10_000L }
         )
         sender.start()
 
