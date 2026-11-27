@@ -39,6 +39,7 @@ import com.castpro.core.streaming.encoder.computeAspectMatchedSize
 import com.castpro.core.streaming.monitor.ScreenResolutionMonitor
 import com.castpro.core.streaming.lifecycle.CleanupStep
 import com.castpro.core.streaming.lifecycle.IndependentCleanup
+import com.castpro.core.streaming.lifecycle.PipelineReplacementGate
 import com.castpro.core.streaming.lifecycle.OrientationReconfigurationPolicy
 import com.castpro.core.streaming.lifecycle.VideoStallAction
 import com.castpro.core.streaming.lifecycle.VideoStallPolicy
@@ -90,9 +91,12 @@ class ScreenCaptureService : Service() {
     // callbacks run on the TCP thread. Both touch the encoder/config pair, so
     // serialize them to avoid stale keyframes and half-swapped pipelines.
     private val pipelineLock = Any()
-    // Incremented on every START/STOP so a delayed main-thread teardown from
-    // an old session cannot stop the foreground service of a newer session.
-    @Volatile private var sessionGeneration = 0
+    private val pipelineGate = PipelineReplacementGate(pipelineLock)
+    private val reconfigurationLock = Any()
+    private val lifecycleLock = Any()
+    // Incremented on every START/STOP. Atomic reads are used by preparation
+    // work that runs outside pipelineLock.
+    private val sessionGeneration = AtomicInteger(0)
     @Volatile private var currentRotationDegrees: Int = 0
     @Volatile private var useNativeEncoder: Boolean = false
 
@@ -295,9 +299,12 @@ class ScreenCaptureService : Service() {
         isGamingMode: Boolean,
         forceRecreate: Boolean = false
     ) {
-        if (!started.get()) return
+        if (!started.get() || stopping.get()) return
         serviceScope.launch {
-            val project = mediaProjection ?: return@launch
+            synchronized(reconfigurationLock) {
+            val expectedGeneration = sessionGeneration.get()
+            if (!started.get() || stopping.get()) return@synchronized
+            val project = mediaProjection ?: return@synchronized
             val tcp = transport ?: return@launch
             if (!transportConnected) return@launch
             val (outputWidth, outputHeight) = cappedStreamDimensions(width, height)
@@ -336,14 +343,20 @@ class ScreenCaptureService : Service() {
                     onError = { message -> CastSessionBus.setError(message) },
                     useNativeEncoder = useNativeEncoder
                 )
-                synchronized(pipelineLock) {
-                    if (!started.get() || !transportConnected ||
-                        mediaProjection !== project || transport !== tcp
-                    ) {
-                        runCatching { enc.stop() }
-                        throw IllegalStateException("Session changed while applying quality")
+                val installed = pipelineGate.installOrRelease(
+                    expectedGeneration = expectedGeneration,
+                    currentGeneration = { sessionGeneration.get() },
+                    isStarted = { started.get() },
+                    isStopping = { stopping.get() },
+                    replacement = enc,
+                    release = { replacement ->
+                        runCatching { replacement.stop() }
+                        runCatching { inputSurface.release() }
+                    },
+                    install = {
+                    if (!transportConnected || mediaProjection !== project || transport !== tcp) {
+                        throw IllegalStateException("Session resources changed while applying quality")
                     }
-
                     // Do NOT create a second VirtualDisplay from the same
                     // MediaProjection: Android rejects that even after release().
                     // Keep the display alive and swap the encoder's input surface.
@@ -403,6 +416,11 @@ class ScreenCaptureService : Service() {
                         "${outputWidth}x${outputHeight} · ${fps} fps · ${codec.substringAfterLast('/').uppercase()}"
                     )
                     appendStatus("applyLiveConfig done")
+                    }
+                )
+                if (!installed) {
+                    Log.i(tag, "Discarded prepared encoder because session generation changed")
+                    return@synchronized
                 }
             } catch (e: Exception) {
                 Log.e(tag, "Could not apply live quality change", e)
@@ -410,6 +428,7 @@ class ScreenCaptureService : Service() {
                 CastSessionBus.setAppliedQuality(null)
                 CastSessionBus.setError("Could not apply quality: ${e.message ?: "encoder error"}")
                 appendStatus("applyLiveConfig failed: ${e.message}")
+            }
             }
         }
     }
@@ -436,16 +455,15 @@ class ScreenCaptureService : Service() {
         val (streamWidth, streamHeight) = cappedStreamDimensions(width, height)
         val safeFps = cappedFps(fps)
         val safeBitrate = cappedBitrate(bitrate)
-        // A previous run leaves `stopping` set; clear it before claiming a new session.
-        stopping.set(false)
-        val generation = ++sessionGeneration
-        appendStatus("startStreamingWithProjection entered")
-        if (!started.compareAndSet(false, true)) {
-            // A second start while a session is running: replace the old one.
-            stopStreaming()
-            started.set(true)
+        // Serialize session ownership with stop completion. A new START cannot
+        // clear `stopping` until the previous teardown has left pipelineLock.
+        val generation = synchronized(lifecycleLock) {
+            if (started.get()) stopStreaming()
             stopping.set(false)
+            started.set(true)
+            sessionGeneration.incrementAndGet()
         }
+        appendStatus("startStreamingWithProjection entered generation=$generation")
         currentHost = host
         currentReceiverName = receiverName
         CastSessionBus.setConnectionState(
@@ -491,7 +509,7 @@ class ScreenCaptureService : Service() {
         }
 
         serviceScope.launch {
-            if (generation != sessionGeneration) return@launch
+            if (generation != sessionGeneration.get() || stopping.get()) return@launch
             try {
                 val config = StreamConfig(
                     width = streamWidth,
@@ -908,11 +926,14 @@ class ScreenCaptureService : Service() {
     }
 
     private fun stopStreaming(failure: String? = null) {
+        synchronized(lifecycleLock) {
+        // Invalidate preparation work before any network/resource cleanup.
         if (!stopping.compareAndSet(false, true)) return
-        val generation = ++sessionGeneration
+        val generation = sessionGeneration.incrementAndGet()
         val failedHost = currentHost
         val failedName = currentReceiverName
         Log.i(tag, "Stopping screen casting${failure?.let { ": $it" } ?: ""}")
+        pipelineGate.withPipelineLock {
         try {
             // IndependentCleanup guarantees later resources are released even
             // when an earlier close/stop implementation throws.
@@ -984,12 +1005,14 @@ class ScreenCaptureService : Service() {
             // a CalledFromWrongThread crash.
             Handler(Looper.getMainLooper()).post {
                 // A new START may already own the service; do not tear it down.
-                if (generation == sessionGeneration) {
+                if (generation == sessionGeneration.get()) {
                     stopForegroundCompat()
                     stopSelf()
                 }
             }
-            if (generation == sessionGeneration) started.set(false)
+            if (generation == sessionGeneration.get()) started.set(false)
+        }
+        }
         }
     }
 
