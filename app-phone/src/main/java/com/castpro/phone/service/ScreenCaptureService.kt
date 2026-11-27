@@ -719,6 +719,9 @@ class ScreenCaptureService : Service() {
                 // just been recreated, so reconnect cannot emit a bare IDR.
                 encoder?.requestKeyFrame()
             }
+            // Re-check orientation after the transport comes back: the display
+            // may have rotated while the receiver was disconnected.
+            resolutionMonitor?.checkAndNotifyGeometry(force = true)
             val name = currentReceiverName.takeIf { it.isNotBlank() }
                 ?: currentHost.takeIf { it.isNotBlank() }
             updateNotification("Connected to TV${name?.let { " ($it)" } ?: ""}")
