@@ -3,7 +3,7 @@ package com.castpro.tv.ui.screens
 import android.view.TextureView
 import android.view.SurfaceView
 import android.view.ViewGroup
-import android.view.FrameLayout
+import android.widget.FrameLayout
 import android.view.Gravity
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
