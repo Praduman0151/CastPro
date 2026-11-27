@@ -347,6 +347,9 @@ class ScreenCaptureService : Service() {
                     val oldDisplay = virtualDisplay
                     encoder?.stop()
                     encoder = enc
+                    lastVideoFramesSent.set(0)
+                    lastVideoProgressAtMs.set(System.nanoTime() / 1_000_000L)
+                    stallRecoveryRequested.set(false)
 
                     currentConfig = next
                     currentStreamConfigPacket = StreamConfigPacket(
@@ -400,6 +403,7 @@ class ScreenCaptureService : Service() {
                 }
             } catch (e: Exception) {
                 Log.e(tag, "Could not apply live quality change", e)
+                stallRecoveryRequested.set(false)
                 CastSessionBus.setAppliedQuality(null)
                 CastSessionBus.setError("Could not apply quality: ${e.message ?: "encoder error"}")
                 appendStatus("applyLiveConfig failed: ${e.message}")
@@ -578,6 +582,9 @@ class ScreenCaptureService : Service() {
                         useNativeEncoder = useNativeEncoder
                         )
                         encoder = enc
+                        lastVideoFramesSent.set(0)
+                        lastVideoProgressAtMs.set(System.nanoTime() / 1_000_000L)
+                        stallRecoveryRequested.set(false)
                         virtualDisplay = project.createVirtualDisplay(
                             "CastPro-Display",
                             streamWidth,
