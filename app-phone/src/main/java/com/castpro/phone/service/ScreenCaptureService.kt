@@ -230,6 +230,7 @@ class ScreenCaptureService : Service() {
                 )
             }
             ACTION_UPDATE_CONFIG -> {
+                useNativeEncoder = intent.getBooleanExtra(EXTRA_USE_NATIVE_ENCODER, useNativeEncoder)
                 // Apply quality changes to the live session. Recreating the
                 // projection would require the consent dialog again, so keep
                 // MediaProjection and only swap the virtual display + encoder.
