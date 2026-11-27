@@ -214,7 +214,7 @@ class ScreenCaptureService : Service() {
                     width = intent.getIntExtra(EXTRA_WIDTH, 1920),
                     height = intent.getIntExtra(EXTRA_HEIGHT, 1080),
                     dpi = intent.getIntExtra(EXTRA_DPI, 320),
-                    bitrate = intent.getIntExtra(EXTRA_BITRATE, 15_000_000),
+                    bitrate = intent.getIntExtra(EXTRA_BITRATE, 12_000_000),
                     fps = intent.getIntExtra(EXTRA_FPS, 60),
                     codec = intent.getStringExtra(EXTRA_CODEC) ?: "video/avc",
                     isGamingMode = intent.getBooleanExtra(EXTRA_GAMING_MODE, true)
