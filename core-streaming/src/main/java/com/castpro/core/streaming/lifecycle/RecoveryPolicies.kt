@@ -34,3 +34,23 @@ object IndependentCleanup {
         }
     }
 }
+
+/**
+ * Thread-safe rate limiter shared by queue-overflow and watchdog IDR requests.
+ */
+class KeyFrameRequestLimiter(
+    private val minIntervalMs: Long = 500L,
+    private val clockMs: () -> Long = { System.nanoTime() / 1_000_000L }
+) {
+    private var lastAcceptedAtMs = Long.MIN_VALUE
+
+    @Synchronized
+    fun tryAcquire(): Boolean {
+        val now = clockMs()
+        if (lastAcceptedAtMs != Long.MIN_VALUE &&
+            now - lastAcceptedAtMs < minIntervalMs
+        ) return false
+        lastAcceptedAtMs = now
+        return true
+    }
+}
