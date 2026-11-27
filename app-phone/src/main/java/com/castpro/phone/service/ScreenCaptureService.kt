@@ -699,6 +699,8 @@ class ScreenCaptureService : Service() {
         transportConnected = connected
         CastSessionBus.setReceiverConnected(connected, currentHost)
         if (connected) {
+            lastVideoProgressAtMs.set(System.nanoTime() / 1_000_000L)
+            stallRecoveryRequested.set(false)
             hasConnectedOnce = true
             lastTransportError = null
             connectionTimeoutJob?.cancel()
