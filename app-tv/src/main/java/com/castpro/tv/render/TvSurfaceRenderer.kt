@@ -10,6 +10,7 @@ import com.castpro.core.common.model.LatencyMetrics
 import com.castpro.core.common.model.StreamConfig
 import com.castpro.core.common.protocol.AnnexBCodecConfig
 import com.castpro.core.streaming.decoder.HardwareVideoDecoder
+import com.castpro.core.streaming.decoder.VideoDecoderController
 import com.castpro.tv.viewmodel.TvDisplayMode
 
 /**
@@ -25,12 +26,13 @@ class TvSurfaceRenderer(
     private val onVideoSizeChanged: (Int, Int) -> Unit = { _, _ -> },
     private val onError: (String) -> Unit = {},
     private val clockOffsetProvider: () -> Long? = { null },
-    private val onFrameRendered: () -> Unit = {}
+    private val onFrameRendered: () -> Unit = {},
+    private val decoderFactory: ((StreamConfig, Surface, ByteArray?) -> VideoDecoderController)? = null
 ) : SurfaceHolder.Callback {
     private val tag = "TvSurfaceRenderer"
     private var config = initialConfig
     private var displayMode = initialDisplayMode
-    private var decoder: HardwareVideoDecoder? = null
+    private var decoder: VideoDecoderController? = null
     private var sessionCodecConfig: ByteArray? = null
     private var reportedFirstFrame = false
     private var released = false
@@ -65,8 +67,8 @@ class TvSurfaceRenderer(
         reportedFirstFrame = false
     }
 
-    private fun createDecoder(surface: Surface): HardwareVideoDecoder =
-        HardwareVideoDecoder(
+    private fun createDecoder(surface: Surface): VideoDecoderController =
+        decoderFactory?.invoke(config, surface, sessionCodecConfig?.copyOf()) ?: HardwareVideoDecoder(
             initialConfig = config,
             surface = surface,
             initialScalingMode = displayMode.scalingMode,
