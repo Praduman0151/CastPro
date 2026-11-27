@@ -334,7 +334,7 @@ class ScreenCaptureService : Service() {
                         )
                     },
                     onError = { message -> CastSessionBus.setError(message) },
-                useNativeEncoder = useNativeEncoder
+                    useNativeEncoder = useNativeEncoder
                 )
                 synchronized(pipelineLock) {
                     if (!started.get() || !transportConnected ||
@@ -582,7 +582,7 @@ class ScreenCaptureService : Service() {
                                 )
                             },
                             onError = { message -> CastSessionBus.setError(message) },
-                        useNativeEncoder = useNativeEncoder
+                            useNativeEncoder = useNativeEncoder
                         )
                         encoder = enc
                         lastVideoFramesSent.set(0)
