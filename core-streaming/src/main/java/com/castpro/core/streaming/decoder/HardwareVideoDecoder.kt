@@ -39,6 +39,8 @@ class HardwareVideoDecoder(
     private var cachedCodecConfig: ByteArray? = initialCodecConfig?.let { bytes ->
         AnnexBCodecConfig.extractParameterSets(config.codecMime, bytes)
     }
+    // Tracks CSD already queued into the current MediaCodec instance.
+    private var lastSubmittedCsd: ByteArray? = null
 
     private var frameCount = 0
     private var bytesInWindow = 0L
@@ -81,6 +83,7 @@ class HardwareVideoDecoder(
     fun resetSession() {
         synchronized(lock) {
             cachedCodecConfig = null
+            lastSubmittedCsd = null
             decodeGate.resetForReconfigure()
             lastInputTimestampNano = 0L
             lastInputGamingMode = false
@@ -99,6 +102,7 @@ class HardwareVideoDecoder(
             Log.i(tag, "Reconfiguring decoder: ${newConfig.codecMime} ${newConfig.width}x${newConfig.height}")
             stopCodec()
             cachedCodecConfig = null
+            lastSubmittedCsd = null
             decodeGate.resetForReconfigure()
             config = newConfig
             // Reset telemetry to the new configuration instead of showing the
@@ -113,6 +117,7 @@ class HardwareVideoDecoder(
 
     private fun startCodec() {
         if (!running.compareAndSet(false, true)) return
+        lastSubmittedCsd = null
         if (!surface.isValid) {
             running.set(false)
             onError("The TV display surface closed before the decoder started.")
@@ -212,6 +217,7 @@ class HardwareVideoDecoder(
         synchronized(lock) {
             runCatching { mediaCodec?.flush() }
             // flush() discards codec-specific data on many frameworks.
+            lastSubmittedCsd = null
             decodeGate.resetForFlush()
             mediaCodec?.let { codec ->
                 cachedCodecConfig?.let { configBytes ->
@@ -228,6 +234,11 @@ class HardwareVideoDecoder(
 
     private fun queueCodecConfig(codec: MediaCodec, data: ByteArray, offset: Int, length: Int): Boolean {
         if (length <= 0 || offset < 0 || offset > data.size - length) return false
+        val csd = data.copyOfRange(offset, offset + length)
+        if (lastSubmittedCsd?.contentEquals(csd) == true) {
+            Log.d(tag, "Skipping duplicate codec config already submitted to ${codec.name}: bytes=$length")
+            return true
+        }
         val inputIndex = codec.dequeueInputBuffer(10_000)
         if (inputIndex < 0) {
             Log.w(tag, "No input buffer available to resubmit codec config")
@@ -252,6 +263,7 @@ class HardwareVideoDecoder(
             System.nanoTime() / 1_000L,
             MediaCodec.BUFFER_FLAG_CODEC_CONFIG
         )
+        lastSubmittedCsd = csd
         return true
     }
 
@@ -565,6 +577,7 @@ class HardwareVideoDecoder(
 
     private fun stopCodec() {
         running.set(false)
+        lastSubmittedCsd = null
         outputDrainThread?.interrupt()
         outputDrainThread = null
         try {

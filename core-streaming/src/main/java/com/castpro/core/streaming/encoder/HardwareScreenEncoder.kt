@@ -71,6 +71,7 @@ class HardwareScreenEncoder(
 
     private fun createConfiguredEncoder(): MediaCodec {
         val codec = MediaCodec.createEncoderByType(config.codecMime)
+        val targetFps = config.fps.coerceIn(1, 60)
         val baselineLevel = if (config.codecMime.equals(MediaFormat.MIMETYPE_VIDEO_AVC, ignoreCase = true)) {
             runCatching {
                 codec.codecInfo.getCapabilitiesForType(config.codecMime).profileLevels
@@ -84,6 +85,7 @@ class HardwareScreenEncoder(
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, config.bitrate.coerceAtMost(12_000_000))
             setInteger(MediaFormat.KEY_FRAME_RATE, config.fps.coerceIn(1, 60))
+            runCatching { setFloat("max-fps-to-encoder", targetFps.toFloat()) }
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, Constants.DEFAULT_I_FRAME_INTERVAL)
             // Only request Baseline when this exact encoder advertises it. Pair
             // it with that profile's highest advertised level (including 4.2
@@ -102,7 +104,8 @@ class HardwareScreenEncoder(
             setInteger(MediaFormat.KEY_LATENCY, 0)
             setInteger(MediaFormat.KEY_PRIORITY, 0)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                runCatching { setInteger(MediaFormat.KEY_OPERATING_RATE, config.fps.coerceIn(1, 60)) }
+                runCatching { setInteger(MediaFormat.KEY_OPERATING_RATE, targetFps) }
+            runCatching { setFloat("max-fps-to-encoder", targetFps.toFloat()) }
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
@@ -124,6 +127,7 @@ class HardwareScreenEncoder(
                 config.fps.coerceIn(1, 60),
                 Constants.DEFAULT_I_FRAME_INTERVAL
             ).forEach { (key, value) -> setInteger(key, value) }
+            runCatching { setFloat("max-fps-to-encoder", targetFps.toFloat()) }
             setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
             runCatching { setInteger("max-bitrate", config.bitrate.coerceAtMost(12_000_000)) }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
