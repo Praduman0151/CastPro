@@ -22,6 +22,18 @@ class RecoveryPoliciesTest {
         assertEquals(VideoStallAction.RECREATE_ENCODER, VideoStallPolicy.action(8_000))
     }
 
+    @Test fun keyframeRequestsAreCoalescedWithinMinimumInterval() {
+        var now = 1_000L
+        val limiter = KeyFrameRequestLimiter(minIntervalMs = 500L) { now }
+        assertTrue(limiter.tryAcquire())
+        now += 1L
+        assertFalse(limiter.tryAcquire())
+        now += 498L
+        assertFalse(limiter.tryAcquire())
+        now += 1L
+        assertTrue(limiter.tryAcquire())
+    }
+
     @Test fun cleanupContinuesAfterAnEarlierResourceThrows() {
         val released = mutableListOf<String>()
         val failures = mutableListOf<String>()
