@@ -5,6 +5,8 @@ package com.castpro.core.streaming.lifecycle
  * replacements that belong to a session which has already stopped/restarted.
  *
  * The caller owns generation/state; this class owns the shared pipeline lock.
+ * Rejected replacement cleanup is deliberately performed after releasing the
+ * lock because codec stop/release may block.
  */
 class PipelineReplacementGate(private val pipelineLock: Any) {
     fun <T> installOrRelease(
@@ -15,14 +17,19 @@ class PipelineReplacementGate(private val pipelineLock: Any) {
         replacement: T,
         release: (T) -> Unit,
         install: (T) -> Unit
-    ): Boolean = synchronized(pipelineLock) {
-        if (isStopping() || !isStarted() || currentGeneration() != expectedGeneration) {
-            runCatching { release(replacement) }
-            false
-        } else {
-            install(replacement)
-            true
+    ): Boolean {
+        val installed = synchronized(pipelineLock) {
+            if (isStopping() || !isStarted() || currentGeneration() != expectedGeneration) {
+                false
+            } else {
+                install(replacement)
+                true
+            }
         }
+        if (!installed) {
+            runCatching { release(replacement) }
+        }
+        return installed
     }
 
     fun <T> withPipelineLock(action: () -> T): T =
