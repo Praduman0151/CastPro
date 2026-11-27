@@ -85,7 +85,7 @@ class HardwareVideoDecoder(
         synchronized(lock) {
             cachedCodecConfig = null
             lastSubmittedCsd = null
-            decodeGate.resetForReconfigure()
+            decodeGate.resetForSession()
             lastInputTimestampNano = 0L
             lastInputGamingMode = false
         }
