@@ -45,7 +45,11 @@ fun computeAspectMatchedSize(
 
     fun scaleAndAlign(edge: Int): Int {
         val scaledEdge = edge.toLong() * scaleNumerator / scaleDenominator
-        return ((scaledEdge / 16L) * 16L).toInt()
+        val alignedEdge = (scaledEdge / 16L) * 16L
+        require(alignedEdge >= 16L) {
+            "Scaled dimension cannot produce a positive 16-aligned output: input=$edge scaled=$scaledEdge"
+        }
+        return alignedEdge.toInt()
     }
 
     return scaleAndAlign(displayW) to scaleAndAlign(displayH)
