@@ -69,6 +69,7 @@ class ScreenResolutionMonitor(
         handler.postDelayed(debouncedCheck, ORIENTATION_DEBOUNCE_MS)
     }
 
+    @Synchronized
     fun checkAndNotifyGeometry(force: Boolean = false) {
         val (width, height, rotation) = getCurrentScreenMetrics()
         if (force || width != lastWidth || height != lastHeight || rotation != lastRotation) {
