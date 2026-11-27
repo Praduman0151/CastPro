@@ -72,6 +72,7 @@ class HardwareScreenEncoder(
     private fun createConfiguredEncoder(): MediaCodec {
         val codec = MediaCodec.createEncoderByType(config.codecMime)
         val targetFps = config.fps.coerceIn(1, 60)
+        val targetBitrate = config.bitrate.coerceAtMost(Constants.GAMING_BITRATE_BPS)
         val baselineLevel = if (config.codecMime.equals(MediaFormat.MIMETYPE_VIDEO_AVC, ignoreCase = true)) {
             runCatching {
                 codec.codecInfo.getCapabilitiesForType(config.codecMime).profileLevels
@@ -83,7 +84,7 @@ class HardwareScreenEncoder(
 
         val fullFormat = MediaFormat.createVideoFormat(config.codecMime, config.width, config.height).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            setInteger(MediaFormat.KEY_BIT_RATE, config.bitrate.coerceAtMost(12_000_000))
+            setInteger(MediaFormat.KEY_BIT_RATE, targetBitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, config.fps.coerceIn(1, 60))
             runCatching { setFloat("max-fps-to-encoder", targetFps.toFloat()) }
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, Constants.DEFAULT_I_FRAME_INTERVAL)
@@ -122,13 +123,13 @@ class HardwareScreenEncoder(
 
         val vbrFormat = MediaFormat.createVideoFormat(config.codecMime, config.width, config.height).apply {
             EncoderFormatPolicy.minimalFallbackValues(
-                config.bitrate.coerceAtMost(12_000_000),
+                targetBitrate,
                 config.fps.coerceIn(1, 60),
                 Constants.DEFAULT_I_FRAME_INTERVAL
             ).forEach { (key, value) -> setInteger(key, value) }
             runCatching { setFloat("max-fps-to-encoder", targetFps.toFloat()) }
             setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
-            runCatching { setInteger("max-bitrate", config.bitrate.coerceAtMost(12_000_000)) }
+            runCatching { setInteger("max-bitrate", targetBitrate) }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 runCatching { setInteger(MediaFormat.KEY_OPERATING_RATE, targetFps) }
             }
@@ -148,7 +149,7 @@ class HardwareScreenEncoder(
         // KEY_COLOR_TRANSFER and KEY_COLOR_RANGE, plus optional tuning keys.
         val fallbackFormat = MediaFormat.createVideoFormat(config.codecMime, config.width, config.height).apply {
             EncoderFormatPolicy.minimalFallbackValues(
-                config.bitrate.coerceAtMost(12_000_000), config.fps.coerceIn(1, 60), Constants.DEFAULT_I_FRAME_INTERVAL
+                targetBitrate, config.fps.coerceIn(1, 60), Constants.DEFAULT_I_FRAME_INTERVAL
             ).forEach { (key, value) -> setInteger(key, value) }
             runCatching { setFloat("max-fps-to-encoder", targetFps.toFloat()) }
         }

@@ -63,7 +63,7 @@ class LowLatencySocketServer(
                 try {
                     val client = serverSocket?.accept() ?: break
                     client.tcpNoDelay = true
-                    client.receiveBufferSize = 256 * 1024
+                    client.receiveBufferSize = 64 * 1024
                     clientSocket = client
                     val clientIp = client.inetAddress.hostAddress ?: "Unknown"
                     Log.i(tag, "Client connected: $clientIp")

@@ -5,7 +5,7 @@ data class StreamConfig(
     val height: Int = 1080,
     val dpi: Int = 320,
     val fps: Int = 60,
-    val bitrate: Int = 12_000_000,
+    val bitrate: Int = 8_000_000,
     val isGamingMode: Boolean = true,
     val codecMime: String = "video/avc",
     val port: Int = 8998

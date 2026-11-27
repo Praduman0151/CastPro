@@ -426,6 +426,12 @@ class HardwareVideoDecoder(
 
     private fun drainOutput(codec: MediaCodec, timestampNano: Long, isGamingMode: Boolean) {
         val info = MediaCodec.BufferInfo()
+        var latestFrameIndex = -1
+        var latestFrameInfo: MediaCodec.BufferInfo? = null
+
+        // Drain every output currently queued, but do not render a backlog of
+        // stale frames. Release superseded pictures immediately and render only
+        // the newest picture from this drain pass.
         while (true) {
             val outputIndex = codec.dequeueOutputBuffer(info, 0)
             if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
@@ -460,6 +466,13 @@ class HardwareVideoDecoder(
             }
             if (outputIndex < 0) break
 
+            val isConfigOutput = (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
+            val isPicture = info.size > 0 && !isConfigOutput
+            if (!isPicture) {
+                codec.releaseOutputBuffer(outputIndex, false)
+                continue
+            }
+
             if (loggedOutputBuffers < 10) {
                 loggedOutputBuffers++
                 Log.i(
@@ -467,50 +480,56 @@ class HardwareVideoDecoder(
                     "Decoded output #$loggedOutputBuffers size=${info.size} flags=${info.flags} ptsUs=${info.presentationTimeUs}"
                 )
             }
-            val isConfigOutput = (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
-            // Empty/config buffers are not pictures. Rendering them produces a
-            // blank/green TextureView update and inflates the FPS counter.
-            val render = info.size > 0 && !isConfigOutput
-            if (render) {
-                // Count a frame only after Surface release succeeds.
-                codec.releaseOutputBuffer(outputIndex, true)
-                frameCount++
-            } else {
-                codec.releaseOutputBuffer(outputIndex, false)
-            }
 
-            val nowMs = System.currentTimeMillis()
-            if (nowMs - lastFpsTimestamp >= 1_000) {
-                val elapsed = (nowMs - lastFpsTimestamp).coerceAtLeast(1)
-                val fps = ((frameCount * 1_000L) / elapsed).toInt()
-                val bitrate = (bytesInWindow * 8f) / elapsed / 1_000f
-                // Remove the TV/phone wall-clock skew learned from heartbeats;
-                // raw cross-device timestamps are meaningless when the two
-                // clocks differ by seconds.
-                val nowNs = nowMs * 1_000_000L
-                // A one-way sample is not trustworthy until a heartbeat has
-                // established the phone/TV wall-clock offset. Do not clamp a
-                // negative/invalid sample to 0 ms: show it as unavailable instead.
-                val latencyNs = clockOffsetProvider()?.let { offset ->
-                    (nowNs - timestampNano - offset).takeIf { it > 0L }
-                }
-                val latencyMs = latencyNs?.coerceAtMost(1_000_000_000L)
-                    ?.div(1_000_000f) ?: -1f
-                onMetricsUpdated(
-                    LatencyMetrics(
-                        currentFps = fps,
-                        latencyMs = latencyMs,
-                        bitrateMbps = bitrate,
-                        isGamingModeActive = isGamingMode,
-                        resolutionLabel = "${decodedWidth}x${decodedHeight}",
-                        codecLabel = decodedCodecLabel,
-                        targetBitrateMbps = config.bitrate / 1_000_000f
-                    )
-                )
-                frameCount = 0
-                bytesInWindow = 0L
-                lastFpsTimestamp = nowMs
+            // BufferInfo is reused by dequeueOutputBuffer(), so preserve the
+            // metadata belonging to the selected output buffer.
+            val candidateInfo = MediaCodec.BufferInfo().apply {
+                set(info.offset, info.size, info.presentationTimeUs, info.flags)
             }
+            if (latestFrameIndex >= 0) {
+                codec.releaseOutputBuffer(latestFrameIndex, false)
+            }
+            latestFrameIndex = outputIndex
+            latestFrameInfo = candidateInfo
+        }
+
+        if (latestFrameIndex >= 0 && latestFrameInfo != null) {
+            // Count only after MediaCodec accepts the render release.
+            codec.releaseOutputBuffer(latestFrameIndex, true)
+            frameCount++
+        }
+
+        val nowMs = System.currentTimeMillis()
+        if (nowMs - lastFpsTimestamp >= 1_000) {
+            val elapsed = (nowMs - lastFpsTimestamp).coerceAtLeast(1)
+            val fps = ((frameCount * 1_000L) / elapsed).toInt()
+            val bitrate = (bytesInWindow * 8f) / elapsed / 1_000f
+            // Remove the TV/phone wall-clock skew learned from heartbeats;
+            // raw cross-device timestamps are meaningless when the two
+            // clocks differ by seconds.
+            val nowNs = nowMs * 1_000_000L
+            // A one-way sample is not trustworthy until a heartbeat has
+            // established the phone/TV wall-clock offset. Do not clamp a
+            // negative/invalid sample to 0 ms: show it as unavailable instead.
+            val latencyNs = clockOffsetProvider()?.let { offset ->
+                (nowNs - timestampNano - offset).takeIf { it > 0L }
+            }
+            val latencyMs = latencyNs?.coerceAtMost(1_000_000_000L)
+                ?.div(1_000_000f) ?: -1f
+            onMetricsUpdated(
+                LatencyMetrics(
+                    currentFps = fps,
+                    latencyMs = latencyMs,
+                    bitrateMbps = bitrate,
+                    isGamingModeActive = isGamingMode,
+                    resolutionLabel = "${decodedWidth}x${decodedHeight}",
+                    codecLabel = decodedCodecLabel,
+                    targetBitrateMbps = config.bitrate / 1_000_000f
+                )
+            )
+            frameCount = 0
+            bytesInWindow = 0L
+            lastFpsTimestamp = nowMs
         }
     }
 

@@ -42,9 +42,9 @@ object Constants {
     
     // Gaming Mode Defaults
     const val GAMING_FPS = 60
-    const val GAMING_BITRATE_BPS = 12_000_000 // 12 Mbps
+    const val GAMING_BITRATE_BPS = 8_000_000 // 8 Mbps
     const val NORMAL_BITRATE_BPS = 6_000_000  // 6 Mbps
-    const val DEFAULT_I_FRAME_INTERVAL = 1    // 1 second
+    const val DEFAULT_I_FRAME_INTERVAL = 3    // 3 seconds
 
     // Audio Defaults
     const val AUDIO_SAMPLE_RATE = 48000
