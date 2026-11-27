@@ -133,6 +133,9 @@ class ScreenCaptureService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private fun alignStreamDimension(value: Int): Int =
+        ((value.coerceAtLeast(16) + 15) / 16) * 16
+
     private fun appendStatus(msg: String) {
         try {
             java.io.File("/sdcard/Download/castpro-status.txt").appendText(
@@ -263,9 +266,11 @@ class ScreenCaptureService : Service() {
             val previousConfig = currentConfig
             val previousPacket = currentStreamConfigPacket
             val previousDpi = previousConfig?.dpi ?: dpi
+            val outputWidth = alignStreamDimension(width)
+            val outputHeight = alignStreamDimension(height)
             val next = StreamConfig(
-                width = width,
-                height = height,
+                width = outputWidth,
+                height = outputHeight,
                 dpi = dpi,
                 fps = fps,
                 bitrate = bitrate,
@@ -274,7 +279,7 @@ class ScreenCaptureService : Service() {
                 codecMime = codec
             )
             if (currentConfig == next) return@launch
-            appendStatus("applyLiveConfig ${width}x$height@${fps}fps ${bitrate / 1_000_000}M $codec")
+            appendStatus("applyLiveConfig ${outputWidth}x$outputHeight@${fps}fps ${bitrate / 1_000_000}M $codec")
             Log.i(tag, "Applying live quality: ${next.width}x${next.height}@${next.fps} $codec")
             var newEncoder: ScreenEncoderBackend? = null
             var createdDisplay: VirtualDisplay? = null
@@ -305,8 +310,8 @@ class ScreenCaptureService : Service() {
                     currentConfig = next
                     currentStreamConfigPacket = StreamConfigPacket(
                         codec = com.castpro.core.common.model.VideoCodec.fromMime(codec),
-                        width = width,
-                        height = height,
+                        width = outputWidth,
+                        height = outputHeight,
                         fps = fps,
                         bitrate = bitrate,
                         rotationDegrees = currentRotationDegrees,
@@ -319,8 +324,8 @@ class ScreenCaptureService : Service() {
                     if (oldDisplay == null) {
                         val display = project.createVirtualDisplay(
                             "CastPro-Display",
-                            width,
-                            height,
+                            outputWidth,
+                            outputHeight,
                             dpi,
                             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                             inputSurface,
@@ -338,7 +343,7 @@ class ScreenCaptureService : Service() {
                         // old-size mirror scaling into a new-size format, which the
                         // TV saw as a horizontal shift. VirtualDisplay.resize()
                         // keeps the mirror geometry in step with the encoder.
-                        runCatching { oldDisplay.resize(width, height, dpi) }
+                        runCatching { oldDisplay.resize(outputWidth, outputHeight, dpi) }
                             .onFailure { Log.w(tag, "VirtualDisplay.resize was rejected", it) }
                         oldDisplay.setSurface(inputSurface)
                         virtualDisplay = oldDisplay
@@ -348,9 +353,9 @@ class ScreenCaptureService : Service() {
                     sendHeartbeat(tcp)
                     enc.requestKeyFrame()
                     CastSessionBus.setError(null)
-                    updateNotification("Streaming ${width}×${height} @ ${fps}FPS • quality updated")
+                    updateNotification("Streaming ${outputWidth}×${outputHeight} @ ${fps}FPS • quality updated")
                     CastSessionBus.setAppliedQuality(
-                        "${width}x${height} · ${fps} fps · ${codec.substringAfterLast('/').uppercase()}"
+                        "${outputWidth}x${outputHeight} · ${fps} fps · ${codec.substringAfterLast('/').uppercase()}"
                     )
                     appendStatus("applyLiveConfig done")
                     committed = true
@@ -447,6 +452,8 @@ class ScreenCaptureService : Service() {
         webPort: Int,
         enableWakeLock: Boolean
     ) {
+        val streamWidth = alignStreamDimension(width)
+        val streamHeight = alignStreamDimension(height)
         // A previous run leaves `stopping` set; clear it before claiming a new session.
         stopping.set(false)
         val generation = ++sessionGeneration
@@ -505,8 +512,8 @@ class ScreenCaptureService : Service() {
             if (generation != sessionGeneration) return@launch
             try {
                 val config = StreamConfig(
-                    width = width,
-                    height = height,
+                    width = streamWidth,
+                    height = streamHeight,
                     dpi = dpi,
                     fps = fps,
                     bitrate = bitrate,
@@ -517,8 +524,8 @@ class ScreenCaptureService : Service() {
                 currentConfig = config
                 currentStreamConfigPacket = StreamConfigPacket(
                     codec = com.castpro.core.common.model.VideoCodec.fromMime(codec),
-                    width = width,
-                    height = height,
+                    width = streamWidth,
+                    height = streamHeight,
                     fps = fps,
                     bitrate = bitrate,
                     rotationDegrees = currentRotationDegrees,
@@ -589,8 +596,8 @@ class ScreenCaptureService : Service() {
                         encoder = enc
                         virtualDisplay = project.createVirtualDisplay(
                             "CastPro-Display",
-                            width,
-                            height,
+                            streamWidth,
+                            streamHeight,
                             dpi,
                             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                             inputSurface,
@@ -686,9 +693,9 @@ class ScreenCaptureService : Service() {
                         ?: currentHost.takeIf { host.isNotBlank() }?.let { "TV: $it" },
                     if (webEnabled) "Web: http://${LocalNetwork.activeIpv4(this@ScreenCaptureService)}:$safeWebPort" else null
                 ).joinToString(" • ")
-                updateNotification("Streaming $width×$height @ ${fps}FPS${if (destination.isBlank()) "" else " • $destination"}")
+                updateNotification("Streaming $streamWidth×$streamHeight @ ${fps}FPS${if (destination.isBlank()) "" else " • $destination"}")
                 CastSessionBus.setAppliedQuality(
-                    "${width}x${height} · ${fps} fps · ${codec.substringAfterLast('/').uppercase()}"
+                    "${streamWidth}x${streamHeight} · ${fps} fps · ${codec.substringAfterLast('/').uppercase()}"
                 )
                 Log.i(tag, "Screen casting pipeline started (host='$host', web=$webEnabled)")
             } catch (e: Exception) {

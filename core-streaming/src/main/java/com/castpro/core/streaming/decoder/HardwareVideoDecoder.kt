@@ -8,6 +8,7 @@ import android.util.Log
 import android.view.Surface
 import com.castpro.core.common.model.LatencyMetrics
 import com.castpro.core.common.model.StreamConfig
+import com.castpro.core.common.protocol.AnnexBCodecConfig
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.ceil
 
@@ -23,24 +24,30 @@ class HardwareVideoDecoder(
     initialScalingMode: Int = MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING,
     private val onMetricsUpdated: (LatencyMetrics) -> Unit,
     private val onError: (String) -> Unit = {},
-    private val clockOffsetProvider: () -> Long? = { null }
+    private val clockOffsetProvider: () -> Long? = { null },
+    initialCodecConfig: ByteArray? = null
 ) : VideoDecoderSink {
     private val tag = "HardwareVideoDecoder"
     private val lock = Any()
     @Volatile private var config: StreamConfig = initialConfig
     private var mediaCodec: MediaCodec? = null
     private val running = AtomicBoolean(false)
-    private var waitingForKeyframe = true
+    private val decodeGate = VideoDecodeGate()
     private val outputInfo = MediaCodec.BufferInfo()
     // MediaCodec loses codec-specific data on flush/reconfigure/restart. Keep
     // the last SPS/PPS (or VPS/SPS/PPS) so every new codec can be primed.
-    private var cachedCodecConfig: ByteArray? = null
+    private var cachedCodecConfig: ByteArray? = initialCodecConfig?.let { bytes ->
+        AnnexBCodecConfig.extractParameterSets(config.codecMime, bytes)
+    }
 
     private var frameCount = 0
     private var bytesInWindow = 0L
     private var lastFpsTimestamp = SystemClock.elapsedRealtime()
     private var loggedInputPackets = 0
     private var loggedOutputBuffers = 0
+    @Volatile private var outputDrainThread: Thread? = null
+    @Volatile private var lastInputTimestampNano: Long = 0L
+    @Volatile private var lastInputGamingMode: Boolean = false
 
     @Volatile private var decodedWidth: Int = config.width
     @Volatile private var decodedHeight: Int = config.height
@@ -84,6 +91,7 @@ class HardwareVideoDecoder(
             Log.i(tag, "Reconfiguring decoder: ${newConfig.codecMime} ${newConfig.width}x${newConfig.height}")
             stopCodec()
             cachedCodecConfig = null
+            decodeGate.resetForReconfigure()
             config = newConfig
             // Reset telemetry to the new configuration instead of showing the
             // previous resolution until the next output-format callback.
@@ -117,8 +125,8 @@ class HardwareVideoDecoder(
                 val capabilities = codec.codecInfo
                     ?.getCapabilitiesForType(config.codecMime)
                     ?.videoCapabilities
-                val width = align(config.width, capabilities?.widthAlignment ?: 1)
-                val height = align(config.height, capabilities?.heightAlignment ?: 1)
+                val width = align(config.width, maxOf(16, capabilities?.widthAlignment ?: 1))
+                val height = align(config.height, maxOf(16, capabilities?.heightAlignment ?: 1))
                 if (capabilities != null && !capabilities.isSizeSupported(width, height)) {
                     throw IllegalStateException("Decoder does not support ${width}x${height}")
                 }
@@ -137,14 +145,18 @@ class HardwareVideoDecoder(
                 runCatching { codec.setVideoScalingMode(videoScalingMode) }
                 codec.start()
                 mediaCodec = codec
-                waitingForKeyframe = true
+                decodeGate.resetForFlush()
                 cachedCodecConfig?.let { configBytes ->
-                    queueCodecConfig(codec, configBytes, 0, configBytes.size)
+                    if (AnnexBCodecConfig.hasRequiredParameterSets(config.codecMime, configBytes) &&
+                        queueCodecConfig(codec, configBytes, 0, configBytes.size)
+                    ) {
+                        decodeGate.markCodecConfigAvailable()
+                    }
                 }
                 resetMetrics()
                 Log.i(
                     tag,
-                    "Decoder started: ${preferredName ?: "hardware"} " +
+                    "Decoder started: name=${codec.name} preferred=${preferredName ?: "hardware"} " +
                         "${config.codecMime} ${width}x${height}"
                 )
                 onError("")
@@ -197,12 +209,16 @@ class HardwareVideoDecoder(
         synchronized(lock) {
             runCatching { mediaCodec?.flush() }
             // flush() discards codec-specific data on many frameworks.
+            decodeGate.resetForFlush()
             mediaCodec?.let { codec ->
                 cachedCodecConfig?.let { configBytes ->
-                    queueCodecConfig(codec, configBytes, 0, configBytes.size)
+                    if (AnnexBCodecConfig.hasRequiredParameterSets(config.codecMime, configBytes) &&
+                        queueCodecConfig(codec, configBytes, 0, configBytes.size)
+                    ) {
+                        decodeGate.markCodecConfigAvailable()
+                    }
                 }
             }
-            waitingForKeyframe = true
             resetMetrics()
         }
     }
@@ -256,11 +272,16 @@ class HardwareVideoDecoder(
             // The sender marks IDRs; the byte scan is only a fallback for
             // older senders that emit Annex-B start codes.
             val keyFrame = frame.isKeyframe || isKeyFrame(data, offset, length)
-            if (loggedInputPackets < 5) {
+            lastInputTimestampNano = timestampNano
+            lastInputGamingMode = isGamingMode
+            if (loggedInputPackets < 10) {
                 loggedInputPackets++
                 Log.i(
                     tag,
-                    "Video input #$loggedInputPackets bytes=$length codecConfig=$isCodecConfig keyframe=$keyFrame"
+                    "Video input #$loggedInputPackets type=VIDEO_NAL flags(codecConfig=$isCodecConfig,keyframe=$keyFrame) " +
+                        "bytes=$length first16=${AnnexBCodecConfig.hexPrefix(data, offset, length)} " +
+                        "annexBNalTypes=${AnnexBCodecConfig.nalUnitTypes(config.codecMime, data, offset, length)} " +
+                        "codec=${mediaCodec?.name ?: "not-started"} mime=${config.codecMime}"
                 )
             }
             if (mediaCodec == null && keyFrame && surface.isValid) {
@@ -273,20 +294,38 @@ class HardwareVideoDecoder(
 
             try {
                 if (isCodecConfig) {
-                    if (length > 0 && offset >= 0 && offset <= data.size - length) {
-                        cachedCodecConfig = data.copyOfRange(offset, offset + length)
+                    val parameterSets = AnnexBCodecConfig.extractParameterSets(config.codecMime, data, offset, length)
+                    if (parameterSets == null) {
+                        Log.e(
+                            tag,
+                            "Rejecting invalid codec config: codec=${config.codecMime} bytes=$length " +
+                                "first16=${AnnexBCodecConfig.hexPrefix(data, offset, length)} " +
+                                "nalTypes=${AnnexBCodecConfig.nalUnitTypes(config.codecMime, data, offset, length)}"
+                        )
+                        return false
                     }
-                    val queued = queueCodecConfig(codec, data, offset, length)
-                    if (!queued) waitingForKeyframe = true
-                    if (running.get() && mediaCodec === codec) {
-                        drainOutput(codec, timestampNano, isGamingMode)
+                    cachedCodecConfig = parameterSets
+                    val queued = queueCodecConfig(codec, parameterSets, 0, parameterSets.size)
+                    if (queued) {
+                        decodeGate.markCodecConfigAvailable()
                     }
                     return queued
                 }
 
-                // Parameter sets are safe (and necessary) before the first IDR.
-                // Queue them even while waiting, but keep waiting for a real IDR.
-                if (waitingForKeyframe && !keyFrame) return false
+                // Surface recreation may seed this decoder with the session CSD.
+                // As a second line of defense, recover if a sender bundles valid
+                // parameter sets and an IDR into the same Annex-B access unit.
+                if (!decodeGate.hasCodecConfig() && keyFrame) {
+                    val inlineConfig = decodeGate.extractInlineParameterSets(config.codecMime, data, offset, length)
+                    if (inlineConfig != null && queueCodecConfig(codec, inlineConfig, 0, inlineConfig.size)) {
+                        cachedCodecConfig = inlineConfig
+                        decodeGate.markCodecConfigAvailable()
+                        Log.i(tag, "Recovered codec config inline with IDR: ${inlineConfig.size} bytes")
+                    }
+                }
+                // An IDR alone is not enough: require validated SPS/PPS (AVC)
+                // or VPS/SPS/PPS (HEVC) before any access unit reaches MediaCodec.
+                if (!decodeGate.canQueueFrame(keyFrame)) return false
 
                 // This runs on the decoder thread, not on the TCP reader. A
                 // bounded keyframe wait lets a large IDR acquire an input
@@ -294,7 +333,7 @@ class HardwareVideoDecoder(
                 // dropped immediately because late frames are worthless.
                 val inputIndex = codec.dequeueInputBuffer(if (keyFrame) KEYFRAME_WAIT_MS else 0L)
                 if (inputIndex < 0) {
-                    waitingForKeyframe = true
+                    decodeGate.resetForFlush()
                     return false
                 }
 
@@ -306,13 +345,13 @@ class HardwareVideoDecoder(
                 if (inputBuffer == null) {
                     Log.w(tag, "Decoder returned a null input buffer; returning the slot empty")
                     codec.queueInputBuffer(inputIndex, 0, 0, presentationTimeUs, 0)
-                    waitingForKeyframe = true
+                    decodeGate.resetForFlush()
                     return false
                 }
                 if (offset < 0 || length <= 0 || offset > data.size - length) {
                     Log.w(tag, "Rejecting invalid video payload range: offset=$offset length=$length size=${data.size}")
                     codec.queueInputBuffer(inputIndex, 0, 0, presentationTimeUs, 0)
-                    waitingForKeyframe = true
+                    decodeGate.resetForFlush()
                     return false
                 }
                 if (length > inputBuffer.remaining()) {
@@ -320,7 +359,7 @@ class HardwareVideoDecoder(
                     // poison decoder state and produce a green/corrupt picture.
                     Log.w(tag, "Dropping oversized video access unit: $length bytes, buffer=${inputBuffer.remaining()}")
                     codec.queueInputBuffer(inputIndex, 0, 0, presentationTimeUs, 0)
-                    waitingForKeyframe = true
+                    decodeGate.resetForFlush()
                     return false
                 }
                 inputBuffer.put(data, offset, length)
@@ -329,7 +368,7 @@ class HardwareVideoDecoder(
                 // reporting; feeding it here makes SurfaceFlinger delay frames
                 // and the picture appears to run in slow motion.
                 codec.queueInputBuffer(inputIndex, 0, length, presentationTimeUs, 0)
-                if (keyFrame) waitingForKeyframe = false
+                if (keyFrame) decodeGate.markKeyframeQueued()
                 return true
             } catch (e: Throwable) {
                 Log.e(tag, "Decode error", e)
@@ -337,7 +376,7 @@ class HardwareVideoDecoder(
                 // and rebuild from the next IDR instead of queuing into a dead
                 // decoder for the rest of the session.
                 stopCodec()
-                waitingForKeyframe = true
+                decodeGate.resetForFlush()
                 onError(e.message ?: "Video decoder error")
                 return false
             } finally {
@@ -364,12 +403,22 @@ class HardwareVideoDecoder(
                 val profile = runCatching { format.getInteger(MediaFormat.KEY_PROFILE) }.getOrDefault(-1)
                 val profileLabel = profileName(mime, profile)
                 decodedCodecLabel = codecDisplayName(mime) + if (profileLabel.isBlank()) "" else " $profileLabel"
-                Log.i(tag, "Decoder output format: $decodedCodecLabel ${decodedWidth}x${decodedHeight}")
+                val cropLeft = runCatching { format.getInteger("crop-left") }.getOrDefault(0)
+                val cropRight = runCatching { format.getInteger("crop-right") }.getOrDefault(decodedWidth - 1)
+                val cropTop = runCatching { format.getInteger("crop-top") }.getOrDefault(0)
+                val cropBottom = runCatching { format.getInteger("crop-bottom") }.getOrDefault(decodedHeight - 1)
+                val colorFormat = runCatching { format.getInteger(MediaFormat.KEY_COLOR_FORMAT) }.getOrDefault(-1)
+                Log.i(
+                    tag,
+                    "Decoder output format changed: ${decodedWidth}x${decodedHeight} " +
+                        "crop-left=$cropLeft crop-right=$cropRight crop-top=$cropTop crop-bottom=$cropBottom " +
+                        "color-format=$colorFormat mime=$mime profile=$profile"
+                )
                 continue
             }
             if (outputIndex < 0) break
 
-            if (loggedOutputBuffers < 5) {
+            if (loggedOutputBuffers < 10) {
                 loggedOutputBuffers++
                 Log.i(
                     tag,
@@ -380,8 +429,13 @@ class HardwareVideoDecoder(
             // Empty/config buffers are not pictures. Rendering them produces a
             // blank/green TextureView update and inflates the FPS counter.
             val render = info.size > 0 && !isConfigOutput
-            codec.releaseOutputBuffer(outputIndex, render)
-            if (render) frameCount++
+            if (render) {
+                // Count a frame only after Surface release succeeds.
+                codec.releaseOutputBuffer(outputIndex, true)
+                frameCount++
+            } else {
+                codec.releaseOutputBuffer(outputIndex, false)
+            }
 
             // Wall clocks can jump (NTP, manual changes, sleep). FPS windows
             // and latency samples must use a monotonic clock instead.
@@ -485,6 +539,8 @@ class HardwareVideoDecoder(
 
     private fun stopCodec() {
         running.set(false)
+        outputDrainThread?.interrupt()
+        outputDrainThread = null
         try {
             mediaCodec?.stop()
         } catch (_: Exception) {

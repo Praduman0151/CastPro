@@ -133,6 +133,9 @@ class TvMainActivity : ComponentActivity() {
                                 // must never resize the video surface: doing so
                                 // made the whole cast jump when quality changed.
                                 surfaceRenderer?.onGeometry(geometry)
+                            },
+                            onSessionDisconnected = {
+                                runOnUiThread { surfaceRenderer?.onSessionDisconnected() }
                             }
                         )
                     }

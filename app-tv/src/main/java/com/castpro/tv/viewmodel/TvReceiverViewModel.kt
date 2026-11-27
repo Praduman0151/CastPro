@@ -110,6 +110,7 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
     private var onFrame: ((ByteArray, Int, Int, Long, Boolean, Boolean, Boolean) -> Unit)? = null
     private var onAudio: ((ByteArray, Int, Int) -> Unit)? = null
     private var onGeometry: ((GeometryPacket) -> Unit)? = null
+    private var onSessionDisconnected: (() -> Unit)? = null
 
     init {
         _uiState.update {
@@ -211,12 +212,14 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
         onStreamConfig: (StreamConfigPacket) -> Unit,
         onFrameReceived: (ByteArray, Int, Int, Long, Boolean, Boolean, Boolean) -> Unit,
         onAudioReceived: (ByteArray, Int, Int) -> Unit = { _, _, _ -> },
-        onGeometryReceived: (GeometryPacket) -> Unit = {}
+        onGeometryReceived: (GeometryPacket) -> Unit = {},
+        onSessionDisconnected: () -> Unit = {}
     ) {
         this.onStreamConfig = onStreamConfig
         this.onFrame = onFrameReceived
         this.onAudio = onAudioReceived
         this.onGeometry = onGeometryReceived
+        this.onSessionDisconnected = onSessionDisconnected
         if (socketServer != null) return
         createServer()
     }
@@ -227,6 +230,7 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
         retryJob = null
         socketServer?.stop()
         socketServer = null
+        onSessionDisconnected?.invoke()
         _uiState.update {
             it.copy(
                 connectionError = null,
@@ -280,6 +284,8 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
                 }
             },
             onClientDisconnected = {
+                // Clear receiver-side codec configuration on every TCP session end.
+                onSessionDisconnected?.invoke()
                 _uiState.update {
                     it.copy(
                         isStreaming = false,
@@ -423,6 +429,8 @@ class TvReceiverViewModel(application: Application) : AndroidViewModel(applicati
         retryJob?.cancel()
         socketServer?.stop()
         socketServer = null
+        onSessionDisconnected?.invoke()
+        onSessionDisconnected = null
         nsdHelper.stop()
         udpResponder.stop()
         connectivityManager?.let { manager ->

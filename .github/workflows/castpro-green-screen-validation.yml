@@ -1,0 +1,47 @@
+name: CastPro Green Screen Validation
+
+on:
+  push:
+    branches:
+      - fix/castpro-green-screen
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  android-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install Android NDK and CMake
+        run: sdkmanager "ndk;27.2.12479018" "cmake;3.22.1"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run requested tests and APK builds
+        run: ./gradlew :core-common:testDebugUnitTest :core-streaming:testDebugUnitTest :app-phone:assembleDebug :app-tv:assembleDebug
+
+      - name: Upload phone and TV debug APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: castpro-debug-apks-run-${{ github.run_number }}
+          path: |
+            app-phone/build/outputs/apk/debug/app-phone-debug.apk
+            app-tv/build/outputs/apk/debug/app-tv-debug.apk
+          if-no-files-found: error
+          retention-days: 14
