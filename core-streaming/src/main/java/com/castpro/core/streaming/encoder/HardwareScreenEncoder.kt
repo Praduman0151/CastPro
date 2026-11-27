@@ -125,6 +125,7 @@ class HardwareScreenEncoder(
                 Constants.DEFAULT_I_FRAME_INTERVAL
             ).forEach { (key, value) -> setInteger(key, value) }
             setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
+            setInteger(MediaFormat.KEY_MAX_BIT_RATE, config.bitrate.coerceAtMost(12_000_000))
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 runCatching { setInteger(MediaFormat.KEY_OPERATING_RATE, config.fps.coerceIn(1, 60)) }
             }
@@ -144,7 +145,7 @@ class HardwareScreenEncoder(
         // KEY_COLOR_TRANSFER and KEY_COLOR_RANGE, plus optional tuning keys.
         val fallbackFormat = MediaFormat.createVideoFormat(config.codecMime, config.width, config.height).apply {
             EncoderFormatPolicy.minimalFallbackValues(
-                config.bitrate, config.fps, Constants.DEFAULT_I_FRAME_INTERVAL
+                config.bitrate.coerceAtMost(12_000_000), config.fps.coerceIn(1, 60), Constants.DEFAULT_I_FRAME_INTERVAL
             ).forEach { (key, value) -> setInteger(key, value) }
         }
         val fallbackCodec = MediaCodec.createEncoderByType(config.codecMime)
