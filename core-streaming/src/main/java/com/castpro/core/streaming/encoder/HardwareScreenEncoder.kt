@@ -125,7 +125,7 @@ class HardwareScreenEncoder(
                 Constants.DEFAULT_I_FRAME_INTERVAL
             ).forEach { (key, value) -> setInteger(key, value) }
             setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
-            setInteger(MediaFormat.KEY_MAX_BIT_RATE, config.bitrate.coerceAtMost(12_000_000))
+            runCatching { setInteger("max-bitrate", config.bitrate.coerceAtMost(12_000_000)) }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 runCatching { setInteger(MediaFormat.KEY_OPERATING_RATE, config.fps.coerceIn(1, 60)) }
             }
