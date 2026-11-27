@@ -2,6 +2,7 @@ package com.castpro.tv.render
 
 import android.graphics.Matrix
 import android.graphics.SurfaceTexture
+import android.os.Looper
 import android.util.Log
 import android.view.Surface
 import android.view.TextureView
@@ -9,9 +10,14 @@ import com.castpro.core.common.model.GeometryPacket
 import com.castpro.core.common.model.LatencyMetrics
 import com.castpro.core.common.model.StreamConfig
 import com.castpro.core.common.protocol.AnnexBCodecConfig
+import com.castpro.core.streaming.decoder.DecoderCommand
 import com.castpro.core.streaming.decoder.DecoderPipeline
 import com.castpro.core.streaming.decoder.HardwareVideoDecoder
 import com.castpro.tv.viewmodel.TvDisplayMode
+import java.util.ArrayDeque
+import java.util.Arrays
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.math.max
 import kotlin.math.min
 
@@ -35,19 +41,27 @@ class TvTextureRenderer(
 ) : TextureView.SurfaceTextureListener {
 
     private val tag = "TvTextureRenderer"
+    private val stateLock = Any()
     @Volatile private var config: StreamConfig = initialConfig
     private var displayMode: TvDisplayMode = initialDisplayMode
-    private var decoder: HardwareVideoDecoder? = null
-    private var pipeline: DecoderPipeline? = null
+    @Volatile private var decoder: HardwareVideoDecoder? = null
+    @Volatile private var pipeline: DecoderPipeline? = null
     private var outputSurface: Surface? = null
     // Kept across SurfaceTexture destruction/recreation for this TCP session.
-    private var sessionCodecConfig: ByteArray? = null
-    private var renderedFrameUpdates = 0
+    @Volatile private var sessionCodecConfig: ByteArray? = null
+    @Volatile private var renderedFrameUpdates = 0
+    // Early packets can arrive before onSurfaceTextureAvailable fires.
+    private var pendingConfig: StreamConfig? = null
+    private val pendingFrames = ArrayDeque<DecoderCommand.Frame>()
     var isSurfaceReady = false
         private set
 
     init {
         textureView.surfaceTextureListener = this
+        val existingTexture = textureView.surfaceTexture
+        if (textureView.isAvailable && existingTexture != null) {
+            onSurfaceTextureAvailable(existingTexture, textureView.width, textureView.height)
+        }
     }
 
     override fun onSurfaceTextureAvailable(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
@@ -55,23 +69,35 @@ class TvTextureRenderer(
         sizeDecoderBuffer(surfaceTexture)
         val surface = Surface(surfaceTexture)
         outputSurface = surface
-        decoder = HardwareVideoDecoder(
+        val cachedCsd = sessionCodecConfig?.copyOf()
+        val createdDecoder = HardwareVideoDecoder(
             initialConfig = config,
             surface = surface,
             initialScalingMode = displayMode.scalingMode,
             onMetricsUpdated = onMetricsUpdated,
             onError = onError,
             clockOffsetProvider = clockOffsetProvider,
-            initialCodecConfig = sessionCodecConfig?.copyOf()
+            initialCodecConfig = cachedCsd
         )
-        if (sessionCodecConfig != null) {
-            Log.i(tag, "Recreated decoder seeded with cached session CSD (${sessionCodecConfig!!.size} bytes)")
+        if (cachedCsd != null) {
+            Log.i(tag, "Recreated decoder seeded with cached session CSD (${cachedCsd.size} bytes)")
         } else {
             Log.w(tag, "Surface recreated without cached CSD; waiting for inline parameter sets/IDR")
         }
         // All MediaCodec work (including reconfigure and keyframe buffer
         // waits) runs on this thread, never on the socket reader.
-        pipeline = DecoderPipeline(decoder!!).apply { start() }
+        val createdPipeline = DecoderPipeline(createdDecoder).apply { start() }
+        synchronized(stateLock) {
+            decoder = createdDecoder
+            pipeline = createdPipeline
+            pendingConfig?.let {
+                createdPipeline.submitConfig(it)
+                pendingConfig = null
+            }
+            while (pendingFrames.isNotEmpty()) {
+                createdPipeline.submitFrame(pendingFrames.removeFirst())
+            }
+        }
         applyTransform(width, height)
     }
 
@@ -89,9 +115,13 @@ class TvTextureRenderer(
 
     override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
         isSurfaceReady = false
-        pipeline?.stop()
-        pipeline = null
-        decoder = null
+        val activePipeline = synchronized(stateLock) {
+            val current = pipeline
+            pipeline = null
+            decoder = null
+            current
+        }
+        activePipeline?.stop()
         outputSurface?.release()
         outputSurface = null
         return true
@@ -105,6 +135,26 @@ class TvTextureRenderer(
             .onFailure { Log.w(tag, "Could not size decoder buffer to ${width}x${height}", it) }
     }
 
+    private fun updateSurfaceBufferAndTransformSync() {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            textureView.surfaceTexture?.let(::sizeDecoderBuffer)
+            applyTransform()
+            return
+        }
+        val latch = CountDownLatch(1)
+        val posted = textureView.post {
+            try {
+                textureView.surfaceTexture?.let(::sizeDecoderBuffer)
+                applyTransform()
+            } finally {
+                latch.countDown()
+            }
+        }
+        if (posted) {
+            runCatching { latch.await(SURFACE_SYNC_TIMEOUT_MS, TimeUnit.MILLISECONDS) }
+        }
+    }
+
     fun setDisplayMode(mode: TvDisplayMode) {
         displayMode = mode
         decoder?.setVideoScalingMode(mode.scalingMode)
@@ -115,15 +165,18 @@ class TvTextureRenderer(
         // A new StreamConfig starts a new codec session; never reuse stale CSD.
         sessionCodecConfig = null
         config = newConfig
-        // TextureView and its SurfaceTexture belong to the UI thread, while
-        // this callback comes from the socket reader.
-        textureView.post {
-            textureView.surfaceTexture?.let(::sizeDecoderBuffer)
-            applyTransform()
+        // Apply SurfaceTexture.setDefaultBufferSize synchronously before
+        // MediaCodec.reconfigure() starts on the Surface.
+        updateSurfaceBufferAndTransformSync()
+        synchronized(stateLock) {
+            val activePipeline = pipeline
+            if (activePipeline != null) {
+                activePipeline.submitConfig(newConfig)
+            } else {
+                pendingConfig = newConfig
+                pendingFrames.clear()
+            }
         }
-        // The pipeline flushes/rebuilds the decoder on its own thread and
-        // discards frames from the old session until the fresh IDR arrives.
-        pipeline?.submitConfig(newConfig)
     }
 
     fun onFrame(
@@ -144,15 +197,50 @@ class TvTextureRenderer(
                 Log.w(tag, "Ignoring invalid session codec config")
             }
         }
-        // Socket threads only copy the packet into a bounded queue. Decoding,
-        // codec flushes and reconfigures never block TCP reads.
-        pipeline?.submitFrame(data, offset, length, timestampNano, isGamingMode, isCodecConfig, isKeyframe)
+        synchronized(stateLock) {
+            val activePipeline = pipeline
+            if (activePipeline != null) {
+                // Socket threads only copy the packet into a bounded queue. Decoding,
+                // codec flushes and reconfigures never block TCP reads.
+                activePipeline.submitFrame(data, offset, length, timestampNano, isGamingMode, isCodecConfig, isKeyframe)
+            } else if (length > 0 && offset >= 0 && offset <= data.size - length) {
+                val copy = Arrays.copyOfRange(data, offset, offset + length)
+                val frame = DecoderCommand.Frame(
+                    data = copy,
+                    offset = 0,
+                    length = copy.size,
+                    timestampNano = timestampNano,
+                    isGamingMode = isGamingMode,
+                    isCodecConfig = isCodecConfig,
+                    isKeyframe = isKeyframe
+                )
+                while (pendingFrames.size >= MAX_PENDING_EARLY_FRAMES) {
+                    val evictable = pendingFrames.firstOrNull { !it.isCodecConfig && !it.isKeyframe }
+                    if (evictable != null) {
+                        pendingFrames.remove(evictable)
+                    } else if (!frame.isCodecConfig && !frame.isKeyframe) {
+                        return
+                    } else {
+                        pendingFrames.removeFirst()
+                    }
+                }
+                pendingFrames.addLast(frame)
+            }
+        }
     }
 
     /** Must be called by the receiver owner when the TCP client disconnects. */
     fun onSessionDisconnected() {
-        sessionCodecConfig = null
-        Log.i(tag, "Cleared cached codec config after TCP session disconnect")
+        synchronized(stateLock) {
+            sessionCodecConfig = null
+            pendingConfig = null
+            pendingFrames.clear()
+            renderedFrameUpdates = 0
+            decoder?.clearCodecConfig()
+            pipeline?.dropPendingFrames()
+            pipeline?.submitReset()
+        }
+        Log.i(tag, "Cleared cached codec config, pending frames, and render state after TCP session disconnect")
     }
 
     fun onGeometry(geometry: GeometryPacket) {
@@ -163,13 +251,22 @@ class TvTextureRenderer(
     }
 
     fun reset() {
-        pipeline?.submitReset()
+        synchronized(stateLock) {
+            pendingFrames.clear()
+            pipeline?.submitReset()
+        }
     }
 
     fun release() {
-        pipeline?.stop()
-        pipeline = null
-        decoder = null
+        val activePipeline = synchronized(stateLock) {
+            pendingConfig = null
+            pendingFrames.clear()
+            val current = pipeline
+            pipeline = null
+            decoder = null
+            current
+        }
+        activePipeline?.stop()
         outputSurface?.release()
         outputSurface = null
         textureView.surfaceTextureListener = null
@@ -221,5 +318,10 @@ class TvTextureRenderer(
                 "frame=${config.width}x${config.height} scale=${String.format("%.4f", scaleX)}x" +
                 String.format("%.4f", scaleY) + " offset=$translateX,$translateY"
         )
+    }
+
+    companion object {
+        private const val SURFACE_SYNC_TIMEOUT_MS = 250L
+        private const val MAX_PENDING_EARLY_FRAMES = 30
     }
 }

@@ -135,7 +135,7 @@ class TvMainActivity : ComponentActivity() {
                                 surfaceRenderer?.onGeometry(geometry)
                             },
                             onSessionDisconnected = {
-                                runOnUiThread { surfaceRenderer?.onSessionDisconnected() }
+                                surfaceRenderer?.onSessionDisconnected()
                             }
                         )
                     }

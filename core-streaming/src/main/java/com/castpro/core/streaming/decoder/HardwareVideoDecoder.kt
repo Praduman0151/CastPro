@@ -205,6 +205,13 @@ class HardwareVideoDecoder(
         return ceil(value.toFloat() / alignment).toInt() * alignment
     }
 
+    fun clearCodecConfig() {
+        synchronized(lock) {
+            cachedCodecConfig = null
+            decodeGate.resetForReconfigure()
+        }
+    }
+
     override fun reset() {
         synchronized(lock) {
             runCatching { mediaCodec?.flush() }
