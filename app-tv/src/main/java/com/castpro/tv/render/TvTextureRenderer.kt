@@ -1,6 +1,7 @@
 package com.castpro.tv.render
 
 import android.graphics.Matrix
+import android.media.MediaCodec
 import android.graphics.SurfaceTexture
 import android.util.Log
 import android.view.Surface
@@ -58,7 +59,7 @@ class TvTextureRenderer(
         decoder = HardwareVideoDecoder(
             initialConfig = config,
             surface = surface,
-            initialScalingMode = displayMode.scalingMode,
+            initialScalingMode = MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT,
             onMetricsUpdated = onMetricsUpdated,
             onError = onError,
             clockOffsetProvider = clockOffsetProvider,
@@ -109,7 +110,7 @@ class TvTextureRenderer(
 
     fun setDisplayMode(mode: TvDisplayMode) {
         displayMode = mode
-        decoder?.setVideoScalingMode(mode.scalingMode)
+        decoder?.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT)
         applyTransform()
     }
 
