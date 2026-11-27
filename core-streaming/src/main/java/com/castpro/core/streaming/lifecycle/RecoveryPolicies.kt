@@ -2,6 +2,7 @@ package com.castpro.core.streaming.lifecycle
 
 /** Small pure policies shared by Android callbacks and deterministic JVM tests. */
 object OrientationReconfigurationPolicy {
+    const val DEBOUNCE_MS = 250L
     fun shouldReconfigure(currentWidth: Int, currentHeight: Int, displayWidth: Int, displayHeight: Int): Boolean {
         if (currentWidth <= 0 || currentHeight <= 0 || displayWidth <= 0 || displayHeight <= 0) return false
         return (currentWidth >= currentHeight) != (displayWidth >= displayHeight)
