@@ -345,6 +345,16 @@ class ScreenCaptureService : Service() {
                     onError = { message -> CastSessionBus.setError(message) },
                     useNativeEncoder = useNativeEncoder
                 )
+                val nextPacket = StreamConfigPacket(
+                    codec = com.castpro.core.common.model.VideoCodec.fromMime(codec),
+                    width = outputWidth,
+                    height = outputHeight,
+                    fps = safeFps,
+                    bitrate = safeBitrate,
+                    rotationDegrees = currentRotationDegrees,
+                    isGamingMode = isGamingMode
+                )
+                var previousEncoder: ScreenEncoderBackend? = null
                 val installed = pipelineGate.installOrRelease(
                     expectedGeneration = expectedGeneration,
                     currentGeneration = { sessionGeneration.get() },
@@ -365,25 +375,14 @@ class ScreenCaptureService : Service() {
                     // MediaProjection: Android rejects that even after release().
                     // Keep the display alive and swap the encoder's input surface.
                     val oldDisplay = virtualDisplay
-                    encoder?.stop()
+                    previousEncoder = encoder
                     encoder = enc
                     lastVideoFramesSent.set(0)
                     lastVideoProgressAtMs.set(System.nanoTime() / 1_000_000L)
                     stallRecoveryRequested.set(false)
 
                     currentConfig = next
-                    currentStreamConfigPacket = StreamConfigPacket(
-                        codec = com.castpro.core.common.model.VideoCodec.fromMime(codec),
-                        width = outputWidth,
-                        height = outputHeight,
-                        fps = safeFps,
-                        bitrate = safeBitrate,
-                        rotationDegrees = currentRotationDegrees,
-                        isGamingMode = isGamingMode
-                    )
-                    // The TV reconfigures its decoder on this packet, so send it
-                    // before the first frame of the new pipeline.
-                    sendStreamConfig()
+                    currentStreamConfigPacket = nextPacket
 
                     if (oldDisplay == null) {
                         virtualDisplay = project.createVirtualDisplay(
@@ -409,11 +408,7 @@ class ScreenCaptureService : Service() {
                             .onFailure { Log.w(tag, "VirtualDisplay.resize was rejected", it) }
                         oldDisplay.setSurface(inputSurface)
                         virtualDisplay = oldDisplay
-                        // Keep rotation metadata aligned with the new pipeline.
-                        resolutionMonitor?.checkAndNotifyGeometry(force = true)
                     }
-                    sendHeartbeat(tcp)
-                    enc.requestKeyFrame()
                     CastSessionBus.setError(null)
                     updateNotification("Streaming ${outputWidth}×${outputHeight} @ ${safeFps}FPS • quality updated")
                     CastSessionBus.setAppliedQuality(
@@ -426,6 +421,18 @@ class ScreenCaptureService : Service() {
                     Log.i(tag, "Discarded prepared encoder because session generation changed")
                     return@synchronized
                 }
+                // Stop the detached encoder and perform transport operations only
+                // after PipelineReplacementGate has released pipelineLock.
+                previousEncoder?.let { old ->
+                    runCatching { old.stop() }
+                        .onFailure { Log.w(tag, "Could not stop replaced encoder", it) }
+                }
+                sendStreamConfig(tcp, nextPacket)
+                sendHeartbeat(tcp)
+                enc.requestKeyFrame()
+                resolutionMonitor?.checkAndNotifyGeometry(force = true)
+                updateNotification("Streaming ${outputWidth}×${outputHeight} @ ${safeFps}FPS • quality updated")
+                appendStatus("applyLiveConfig done")
             } catch (e: Exception) {
                 Log.e(tag, "Could not apply live quality change", e)
                 stallRecoveryRequested.set(false)
@@ -732,14 +739,26 @@ class ScreenCaptureService : Service() {
                 currentHost,
                 currentReceiverName.takeIf { it.isNotBlank() }
             )
-            synchronized(pipelineLock) {
-                sendStreamConfig()
-                // Calibrate the TV's clock offset immediately, before the first
-                // latency sample is reported.
-                transport?.let { sendHeartbeat(it) }
-                // requestKeyFrame() waits for native CSD when the encoder has
-                // just been recreated, so reconnect cannot emit a bare IDR.
-                encoder?.requestKeyFrame()
+            val reconnect = synchronized(pipelineLock) {
+                if (!started.get() || stopping.get()) {
+                    null
+                } else {
+                    Triple(sessionGeneration.get(), transport, encoder) to currentStreamConfigPacket
+                }
+            }
+            val snapshot = reconnect?.first
+            val reconnectPacket = reconnect?.second
+            val reconnectTransport = snapshot?.second
+            if (snapshot != null && reconnectTransport != null &&
+                reconnectPacket != null &&
+                started.get() && !stopping.get() &&
+                sessionGeneration.get() == snapshot.first
+            ) {
+                // Network writes and codec requests deliberately run outside
+                // pipelineLock; generation guards prevent stale reconnect work.
+                sendStreamConfig(reconnectTransport, reconnectPacket)
+                sendHeartbeat(reconnectTransport)
+                snapshot.third?.requestKeyFrame()
             }
             // Re-check orientation after the transport comes back: the display
             // may have rotated while the receiver was disconnected.
@@ -878,10 +897,13 @@ class ScreenCaptureService : Service() {
         active.send(header, ByteArray(0))
     }
 
-    private fun sendStreamConfig() {
-        val tcp = transport ?: return
-        val packet = currentStreamConfigPacket ?: return
-        val payload = packet.toByteArray()
+    private fun sendStreamConfig(
+        target: StreamTransport? = transport,
+        packet: StreamConfigPacket? = currentStreamConfigPacket
+    ) {
+        val tcp = target ?: return
+        val activePacket = packet ?: return
+        val payload = activePacket.toByteArray()
         val header = PacketHeader(
             type = Constants.TYPE_STREAM_CONFIG,
             flags = 0,
@@ -931,70 +953,89 @@ class ScreenCaptureService : Service() {
 
     private fun stopStreaming(failure: String? = null) {
         synchronized(lifecycleLock) {
-        // Invalidate preparation work before any network/resource cleanup.
-        if (!stopping.compareAndSet(false, true)) return
-        val generation = sessionGeneration.incrementAndGet()
-        val failedHost = currentHost
-        val failedName = currentReceiverName
-        Log.i(tag, "Stopping screen casting${failure?.let { ": $it" } ?: ""}")
-        pipelineGate.withPipelineLock {
-        try {
-            // IndependentCleanup guarantees later resources are released even
-            // when an earlier close/stop implementation throws.
-            IndependentCleanup.run(
-            listOf(
-                CleanupStep("SESSION_END") { sendSessionEnd() },
-                CleanupStep("heartbeat") { heartbeatJob?.cancel() },
-                CleanupStep("video stall watchdog") { videoStallWatchdogJob?.cancel() },
-                CleanupStep("web mirror") { webMirror?.stop() },
-                CleanupStep("resolution monitor") { resolutionMonitor?.stop() },
-                CleanupStep("wake lock") { wakeLock?.release() },
-                CleanupStep("web server") { webServer?.stop() },
-                CleanupStep("audio capture") { audioCapture?.stop() },
-                // Detach the encoder input surface before releasing the codec.
-                CleanupStep("VirtualDisplay") { virtualDisplay?.release() },
-                CleanupStep("encoder") { encoder?.stop() },
-                CleanupStep("MediaProjection callback") {
-                    mediaProjection?.unregisterCallback(projectionCallback)
-                },
-                CleanupStep("MediaProjection") { mediaProjection?.stop() },
-                CleanupStep("transport") { transport?.stop() },
-                CleanupStep("in-game overlay") {
-                    startService(Intent(this, InGameOverlayService::class.java).apply {
-                        action = InGameOverlayService.ACTION_HIDE
-                    })
-                }
-            )
-            ) { resource, error -> Log.w(tag, "Could not release $resource", error) }
-            virtualDisplay = null
-        } finally {
-            // Always return the panel to the user's previous brightness after a cast.
+            // Invalidate preparation work before any network/resource cleanup.
+            if (!stopping.compareAndSet(false, true)) return
+            val generation = sessionGeneration.incrementAndGet()
+            val failedHost = currentHost
+            val failedName = currentReceiverName
+            Log.i(tag, "Stopping screen casting${failure?.let { ": $it" } ?: ""}")
+
+            // Detach references and reset session state atomically with respect
+            // to replacement commits. No stop(), socket send, or server shutdown
+            // is allowed to run while pipelineLock is held.
+            val cleanupSteps = pipelineGate.withPipelineLock {
+                val activeTransport = transport
+                val activeWebMirror = webMirror
+                val activeResolutionMonitor = resolutionMonitor
+                val activeWakeLock = wakeLock
+                val activeWebServer = webServer
+                val activeAudioCapture = audioCapture
+                val activeVirtualDisplay = virtualDisplay
+                val activeEncoder = encoder
+                val activeProjection = mediaProjection
+                val activeHeartbeatJob = heartbeatJob
+                val activeWatchdogJob = videoStallWatchdogJob
+                val activeConnectionTimeoutJob = connectionTimeoutJob
+
+                val steps = listOf(
+                    CleanupStep("SESSION_END") { sendSessionEnd(activeTransport) },
+                    CleanupStep("heartbeat") { activeHeartbeatJob?.cancel() },
+                    CleanupStep("video stall watchdog") { activeWatchdogJob?.cancel() },
+                    CleanupStep("web mirror") { activeWebMirror?.stop() },
+                    CleanupStep("resolution monitor") { activeResolutionMonitor?.stop() },
+                    CleanupStep("wake lock") { activeWakeLock?.release() },
+                    CleanupStep("web server") { activeWebServer?.stop() },
+                    CleanupStep("audio capture") { activeAudioCapture?.stop() },
+                    CleanupStep("VirtualDisplay") { activeVirtualDisplay?.release() },
+                    CleanupStep("encoder") { activeEncoder?.stop() },
+                    CleanupStep("MediaProjection callback") {
+                        activeProjection?.unregisterCallback(projectionCallback)
+                    },
+                    CleanupStep("MediaProjection") { activeProjection?.stop() },
+                    CleanupStep("transport") { activeTransport?.stop() },
+                    CleanupStep("in-game overlay") {
+                        startService(Intent(this, InGameOverlayService::class.java).apply {
+                            action = InGameOverlayService.ACTION_HIDE
+                        })
+                    },
+                    CleanupStep("connection timeout") { activeConnectionTimeoutJob?.cancel() }
+                )
+
+                webMirror = null
+                resolutionMonitor = null
+                wakeLock = null
+                webServer = null
+                audioCapture = null
+                encoder = null
+                virtualDisplay = null
+                mediaProjection = null
+                transport = null
+                currentConfig = null
+                currentStreamConfigPacket = null
+                currentHost = ""
+                currentReceiverName = ""
+                audioMuted = false
+                transportConnected = false
+                hasConnectedOnce = false
+                lastTransportError = null
+                connectionTimeoutJob = null
+                heartbeatJob = null
+                videoStallWatchdogJob = null
+                lastVideoFramesSent.set(0)
+                lastVideoProgressAtMs.set(0)
+                stallRecoveryRequested.set(false)
+                if (generation == sessionGeneration.get()) started.set(false)
+                steps
+            }
+
+            // Every potentially blocking cleanup action executes outside
+            // pipelineLock, but remains independently guarded so one failure
+            // cannot prevent later resources from being released.
+            IndependentCleanup.run(cleanupSteps) { resource, error ->
+                Log.w(tag, "Could not release $resource", error)
+            }
+
             runCatching { screenDimController.restore() }
-            webMirror = null
-            resolutionMonitor = null
-            wakeLock = null
-            webServer = null
-            audioCapture = null
-            encoder = null
-            virtualDisplay = null
-            mediaProjection = null
-            transport = null
-            currentConfig = null
-            currentStreamConfigPacket = null
-            currentHost = ""
-            currentReceiverName = ""
-            audioMuted = false
-            transportConnected = false
-            hasConnectedOnce = false
-            lastTransportError = null
-            connectionTimeoutJob?.cancel()
-            connectionTimeoutJob = null
-            heartbeatJob?.cancel()
-            heartbeatJob = null
-            videoStallWatchdogJob = null
-            lastVideoFramesSent.set(0)
-            lastVideoProgressAtMs.set(0)
-            stallRecoveryRequested.set(false)
             CastSessionBus.stop(failure)
             if (failure != null) {
                 CastSessionBus.setConnectionState(
@@ -1004,9 +1045,6 @@ class ScreenCaptureService : Service() {
                     failure
                 )
             }
-            // stopForeground / stopSelf touch the service's main-thread state;
-            // post them so a background (IO) teardown cannot trigger an ANR or
-            // a CalledFromWrongThread crash.
             Handler(Looper.getMainLooper()).post {
                 // A new START may already own the service; do not tear it down.
                 if (generation == sessionGeneration.get()) {
@@ -1014,9 +1052,6 @@ class ScreenCaptureService : Service() {
                     stopSelf()
                 }
             }
-            if (generation == sessionGeneration.get()) started.set(false)
-        }
-        }
         }
     }
 
