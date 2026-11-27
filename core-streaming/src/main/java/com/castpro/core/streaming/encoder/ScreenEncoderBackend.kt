@@ -46,7 +46,6 @@ object ScreenEncoderFactory {
                     Log.w(TAG, "EXPERIMENTAL opt-in: NativeScreenEncoder selected over TCP")
                     return native to surface
                 } catch (error: Throwable) {
-                    runCatching { nativeSurface?.release() }
                     runCatching { native.stop() }
                     Log.e(TAG, "Opt-in native encoder failed; falling back to hardware", error)
                     onError("Native encoder unavailable; using hardware encoder: ${error.message}")
