@@ -436,6 +436,12 @@ class ScreenCaptureService : Service() {
                     runCatching { old.stop() }
                         .onFailure { Log.w(tag, "Could not stop replaced encoder", it) }
                 }
+                val replacementStillCurrent = synchronized(pipelineLock) {
+                    started.get() && !stopping.get() &&
+                        sessionGeneration.get() == expectedGeneration &&
+                        encoder === enc && transport === tcp
+                }
+                if (!replacementStillCurrent) return@synchronized
                 sendStreamConfig(tcp, nextPacket)
                 sendHeartbeat(tcp)
                 enc.requestKeyFrame()
