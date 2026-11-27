@@ -68,7 +68,7 @@ class TvSurfaceRenderer(
         HardwareVideoDecoder(
             initialConfig = config,
             surface = surface,
-            initialScalingMode = MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT,
+            initialScalingMode = displayMode.scalingMode,
             onMetricsUpdated = { metrics ->
                 onMetricsUpdated(metrics)
                 if (!reportedFirstFrame) {
@@ -85,7 +85,7 @@ class TvSurfaceRenderer(
 
     fun setDisplayMode(mode: TvDisplayMode) {
         displayMode = mode
-        decoder?.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT)
+        decoder?.setVideoScalingMode(mode.scalingMode)
         Log.d(tag, "SURFACE_VIEW display mode=${mode.label}")
     }
 

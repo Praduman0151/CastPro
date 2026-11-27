@@ -20,7 +20,7 @@ import kotlin.math.ceil
 class HardwareVideoDecoder(
     initialConfig: StreamConfig,
     private val surface: Surface,
-    initialScalingMode: Int = MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING,
+    initialScalingMode: Int = MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT,
     private val onMetricsUpdated: (LatencyMetrics) -> Unit,
     private val onError: (String) -> Unit = {},
     private val clockOffsetProvider: () -> Long? = { null },
@@ -171,7 +171,7 @@ class HardwareVideoDecoder(
                     }
                 }
                 codec.configure(format, surface, null, 0)
-                runCatching { codec.setVideoScalingMode(videoScalingMode) }
+                codec.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT)
                 codec.start()
                 mediaCodec = codec
                 decodeGate.resetForFlush()
