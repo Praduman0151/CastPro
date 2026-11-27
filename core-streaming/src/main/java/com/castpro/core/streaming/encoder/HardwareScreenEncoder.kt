@@ -335,7 +335,8 @@ class HardwareScreenEncoder(
             "Encoder codec config accepted: ${parameterSets.size} bytes " +
                 "nalTypes=${AnnexBCodecConfig.nalUnitTypes(config.codecMime, parameterSets)}"
         )
-        sendCodecConfig()
+        // Keep the two-slot async queue available for the ordered CSD + IDR
+        // pair; sendCodecConfig() queues CSD immediately before each keyframe.
     }
 
     /**
