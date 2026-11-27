@@ -84,7 +84,7 @@ class ScreenCaptureService : Service() {
     private var audioMuted = false
     private var currentHost: String = ""
     private var currentReceiverName: String = ""
-    private var currentConfig: StreamConfig? = null
+    @Volatile private var currentConfig: StreamConfig? = null
     private var currentStreamConfigPacket: StreamConfigPacket? = null
     // Live quality changes run on the service coroutine; transport reconnect
     // callbacks run on the TCP thread. Both touch the encoder/config pair, so
