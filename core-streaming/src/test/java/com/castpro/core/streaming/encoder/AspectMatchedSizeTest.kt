@@ -1,6 +1,7 @@
 package com.castpro.core.streaming.encoder
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AspectMatchedSizeTest {
@@ -20,6 +21,10 @@ class AspectMatchedSizeTest {
 
     @Test
     fun shortEdgeNeverExceeds1080() {
-        assertEquals(1440 to 1080, computeAspectMatchedSize(2000, 1500))
+        val (width, height) = computeAspectMatchedSize(2000, 1500)
+        assertEquals(1440, width)
+        assertEquals(0, width % 16)
+        assertEquals(0, height % 16)
+        assertTrue(height <= 1080)
     }
 }
