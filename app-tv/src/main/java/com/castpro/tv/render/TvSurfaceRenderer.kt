@@ -1,6 +1,7 @@
 package com.castpro.tv.render
 
 import android.util.Log
+import android.media.MediaCodec
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -67,7 +68,7 @@ class TvSurfaceRenderer(
         HardwareVideoDecoder(
             initialConfig = config,
             surface = surface,
-            initialScalingMode = displayMode.scalingMode,
+            initialScalingMode = MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT,
             onMetricsUpdated = { metrics ->
                 onMetricsUpdated(metrics)
                 if (!reportedFirstFrame) {
@@ -84,7 +85,7 @@ class TvSurfaceRenderer(
 
     fun setDisplayMode(mode: TvDisplayMode) {
         displayMode = mode
-        decoder?.setVideoScalingMode(mode.scalingMode)
+        decoder?.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT)
         Log.d(tag, "SURFACE_VIEW display mode=${mode.label}")
     }
 

@@ -82,8 +82,8 @@ class HardwareScreenEncoder(
 
         val fullFormat = MediaFormat.createVideoFormat(config.codecMime, config.width, config.height).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            setInteger(MediaFormat.KEY_BIT_RATE, config.bitrate)
-            setInteger(MediaFormat.KEY_FRAME_RATE, config.fps)
+            setInteger(MediaFormat.KEY_BIT_RATE, config.bitrate.coerceAtMost(12_000_000))
+            setInteger(MediaFormat.KEY_FRAME_RATE, config.fps.coerceIn(1, 60))
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, Constants.DEFAULT_I_FRAME_INTERVAL)
             // Only request Baseline when this exact encoder advertises it. Pair
             // it with that profile's highest advertised level (including 4.2
@@ -98,9 +98,12 @@ class HardwareScreenEncoder(
                 setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO)
                 setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
             }
-            setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
+            setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
             setInteger(MediaFormat.KEY_LATENCY, 0)
             setInteger(MediaFormat.KEY_PRIORITY, 0)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                runCatching { setInteger(MediaFormat.KEY_OPERATING_RATE, config.fps.coerceIn(1, 60)) }
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
                 runCatching { setInteger(MediaFormat.KEY_PREPEND_HEADER_TO_SYNC_FRAMES, 1) }
@@ -111,8 +114,29 @@ class HardwareScreenEncoder(
             codec.configure(fullFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
             return codec
         } catch (primaryError: Exception) {
-            Log.w(tag, "Primary encoder format rejected; retrying clean minimal fallback without profile/level/color keys", primaryError)
+            Log.w(tag, "CBR encoder format rejected; retrying with VBR", primaryError)
             runCatching { codec.release() }
+        }
+
+        val vbrFormat = MediaFormat.createVideoFormat(config.codecMime, config.width, config.height).apply {
+            EncoderFormatPolicy.minimalFallbackValues(
+                config.bitrate.coerceAtMost(12_000_000),
+                config.fps.coerceIn(1, 60),
+                Constants.DEFAULT_I_FRAME_INTERVAL
+            ).forEach { (key, value) -> setInteger(key, value) }
+            setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                runCatching { setInteger(MediaFormat.KEY_OPERATING_RATE, config.fps.coerceIn(1, 60)) }
+            }
+        }
+        val vbrCodec = MediaCodec.createEncoderByType(config.codecMime)
+        try {
+            vbrCodec.configure(vbrFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            Log.w(tag, "Encoder configured in VBR fallback mode")
+            return vbrCodec
+        } catch (vbrError: Exception) {
+            Log.w(tag, "VBR fallback rejected; trying codec-minimal format", vbrError)
+            runCatching { vbrCodec.release() }
         }
 
         // Deliberately contain only universally required surface-encoder keys.
@@ -237,7 +261,7 @@ class HardwareScreenEncoder(
                         type = Constants.TYPE_VIDEO_NAL,
                         flags = flags,
                         sequenceNumber = sequenceNumber.incrementAndGet(),
-                        timestampNano = captureTimeNano,
+                        timestampNano = System.currentTimeMillis() * 1_000_000L,
                         payloadLength = bufferInfo.size
                     )
                     val sender = asyncSender
@@ -350,7 +374,7 @@ class HardwareScreenEncoder(
             type = Constants.TYPE_VIDEO_NAL,
             flags = Constants.FLAG_CODEC_CONFIG,
             sequenceNumber = sequenceNumber.incrementAndGet(),
-            timestampNano = SystemClock.elapsedRealtimeNanos(),
+            timestampNano = System.currentTimeMillis() * 1_000_000L,
             payloadLength = data.size
         )
         val sender = asyncSender

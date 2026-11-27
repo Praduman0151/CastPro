@@ -15,7 +15,7 @@ class AsyncFrameSenderTest {
         override val isConnected: Boolean = true
         val firstSendEntered = CountDownLatch(1)
         val releaseFirstSend = CountDownLatch(1)
-        val completedSends = CountDownLatch(3)
+        val completedSends = CountDownLatch(5)
         val sentSequences = CopyOnWriteArrayList<Int>()
 
         override fun start() = Unit
@@ -62,16 +62,17 @@ class AsyncFrameSenderTest {
 
         sender.enqueue(packet(2, Constants.FLAG_CODEC_CONFIG), byteArrayOf(2, 2))
         sender.enqueue(packet(3, Constants.FLAG_KEYFRAME), byteArrayOf(3, 3, 3))
-        // The queue now contains protected CSD + IDR; this P-frame must be rejected.
-        sender.enqueue(packet(4), byteArrayOf(4, 4, 4, 4))
+        sender.enqueue(packet(4, Constants.FLAG_CODEC_CONFIG), byteArrayOf(4, 4, 4))
+        sender.enqueue(packet(5, Constants.FLAG_KEYFRAME), byteArrayOf(5, 5, 5, 5))
+        sender.enqueue(packet(6), byteArrayOf(6, 6, 6, 6, 6))
 
         transport.releaseFirstSend.countDown()
         assertTrue(transport.completedSends.await(2, TimeUnit.SECONDS))
         assertTrue(frameStatsReady.await(2, TimeUnit.SECONDS))
         sender.stop()
 
-        assertEquals(listOf(1, 2, 3), transport.sentSequences.toList())
-        assertEquals(listOf(false to 4), frameStats.filter { !it.first })
+        assertEquals(listOf(1, 2, 3, 4, 5), transport.sentSequences.toList())
+        assertEquals(listOf(false to 5), frameStats.filter { !it.first })
         assertEquals(0, keyFrameRequests.get())
     }
 
@@ -97,14 +98,43 @@ class AsyncFrameSenderTest {
         sender.enqueue(packet(2), byteArrayOf(2, 2))
         sender.enqueue(packet(3), byteArrayOf(3, 3, 3))
         sender.enqueue(packet(4), byteArrayOf(4, 4, 4, 4))
+        sender.enqueue(packet(5), byteArrayOf(5, 5, 5, 5, 5))
+        sender.enqueue(packet(6), byteArrayOf(6, 6, 6, 6, 6, 6))
 
         transport.releaseFirstSend.countDown()
         assertTrue(transport.completedSends.await(2, TimeUnit.SECONDS))
         assertTrue(frameStatsReady.await(2, TimeUnit.SECONDS))
         sender.stop()
 
-        assertEquals(listOf(1, 3, 4), transport.sentSequences.toList())
+        assertEquals(listOf(1, 3, 4, 5, 6), transport.sentSequences.toList())
         assertEquals(listOf(false to 2), frameStats.filter { !it.first })
         assertEquals(1, keyFrameRequests.get())
+    }
+
+    @Test
+    fun rapidPFrameDropsRequestKeyframeAtMostOncePerSecond() {
+        val transport = BlockingTransport()
+        val keyFrameRequests = AtomicInteger()
+        var nowMs = 10_000L
+        val sender = AsyncFrameSender(
+            transport = transport,
+            onRequestKeyFrame = { keyFrameRequests.incrementAndGet() },
+            onStats = { _, _ -> },
+            clockMs = { nowMs }
+        )
+        sender.start()
+        sender.enqueue(packet(1), byteArrayOf(1))
+        assertTrue(transport.firstSendEntered.await(2, TimeUnit.SECONDS))
+        for (sequence in 2..8) sender.enqueue(packet(sequence), ByteArray(sequence))
+        assertEquals(1, keyFrameRequests.get())
+        nowMs += 999L
+        sender.enqueue(packet(9), ByteArray(9))
+        assertEquals(1, keyFrameRequests.get())
+        nowMs += 1L
+        sender.enqueue(packet(10), ByteArray(10))
+        assertEquals(2, keyFrameRequests.get())
+        transport.releaseFirstSend.countDown()
+        assertTrue(transport.completedSends.await(2, TimeUnit.SECONDS))
+        sender.stop()
     }
 }

@@ -134,6 +134,17 @@ class ScreenCaptureService : Service() {
     private fun alignStreamDimension(value: Int): Int =
         ((value.coerceAtLeast(16) + 15) / 16) * 16
 
+    private fun cappedStreamDimensions(width: Int, height: Int): Pair<Int, Int> {
+        val safeWidth = width.coerceAtLeast(16)
+        val safeHeight = height.coerceAtLeast(16)
+        val scale = minOf(1f, 1920f / safeWidth, 1080f / safeHeight)
+        return alignStreamDimension((safeWidth * scale).toInt()).coerceAtMost(1920) to
+            alignStreamDimension((safeHeight * scale).toInt()).coerceAtMost(1080)
+    }
+
+    private fun cappedFps(value: Int) = value.coerceIn(1, 60)
+    private fun cappedBitrate(value: Int) = value.coerceIn(500_000, 12_000_000)
+
     private fun appendStatus(msg: String) {
         try {
             java.io.File("/sdcard/Download/castpro-status.txt").appendText(
@@ -183,7 +194,7 @@ class ScreenCaptureService : Service() {
                     width = intent.getIntExtra(EXTRA_WIDTH, 1920),
                     height = intent.getIntExtra(EXTRA_HEIGHT, 1080),
                     dpi = intent.getIntExtra(EXTRA_DPI, 320),
-                    bitrate = intent.getIntExtra(EXTRA_BITRATE, 15_000_000),
+                    bitrate = intent.getIntExtra(EXTRA_BITRATE, 12_000_000),
                     fps = intent.getIntExtra(EXTRA_FPS, 60),
                     codec = intent.getStringExtra(EXTRA_CODEC) ?: "video/avc",
                     audioMode = runCatching {
@@ -261,20 +272,21 @@ class ScreenCaptureService : Service() {
             val project = mediaProjection ?: return@launch
             val tcp = transport ?: return@launch
             if (!transportConnected) return@launch
-            val outputWidth = alignStreamDimension(width)
-            val outputHeight = alignStreamDimension(height)
+            val (outputWidth, outputHeight) = cappedStreamDimensions(width, height)
+            val safeFps = cappedFps(fps)
+            val safeBitrate = cappedBitrate(bitrate)
             val next = StreamConfig(
                 width = outputWidth,
                 height = outputHeight,
                 dpi = dpi,
-                fps = fps,
-                bitrate = bitrate,
+                fps = safeFps,
+                bitrate = safeBitrate,
                 port = currentConfig?.port ?: Constants.DEFAULT_STREAM_PORT,
                 isGamingMode = isGamingMode,
                 codecMime = codec
             )
             if (currentConfig == next) return@launch
-            appendStatus("applyLiveConfig ${outputWidth}x$outputHeight@${fps}fps ${bitrate / 1_000_000}M $codec")
+            appendStatus("applyLiveConfig ${outputWidth}x$outputHeight@${safeFps}fps ${safeBitrate / 1_000_000}M $codec")
             Log.i(tag, "Applying live quality: ${next.width}x${next.height}@${next.fps} $codec")
             try {
                 // Prepare the replacement encoder first. If this fails the
@@ -314,8 +326,8 @@ class ScreenCaptureService : Service() {
                         codec = com.castpro.core.common.model.VideoCodec.fromMime(codec),
                         width = outputWidth,
                         height = outputHeight,
-                        fps = fps,
-                        bitrate = bitrate,
+                        fps = safeFps,
+                        bitrate = safeBitrate,
                         rotationDegrees = currentRotationDegrees,
                         isGamingMode = isGamingMode
                     )
@@ -353,7 +365,7 @@ class ScreenCaptureService : Service() {
                     sendHeartbeat(tcp)
                     enc.requestKeyFrame()
                     CastSessionBus.setError(null)
-                    updateNotification("Streaming ${outputWidth}×${outputHeight} @ ${fps}FPS • quality updated")
+                    updateNotification("Streaming ${outputWidth}×${outputHeight} @ ${safeFps}FPS • quality updated")
                     CastSessionBus.setAppliedQuality(
                         "${outputWidth}x${outputHeight} · ${fps} fps · ${codec.substringAfterLast('/').uppercase()}"
                     )
@@ -387,8 +399,9 @@ class ScreenCaptureService : Service() {
         webPort: Int,
         enableWakeLock: Boolean
     ) {
-        val streamWidth = alignStreamDimension(width)
-        val streamHeight = alignStreamDimension(height)
+        val (streamWidth, streamHeight) = cappedStreamDimensions(width, height)
+        val safeFps = cappedFps(fps)
+        val safeBitrate = cappedBitrate(bitrate)
         // A previous run leaves `stopping` set; clear it before claiming a new session.
         stopping.set(false)
         val generation = ++sessionGeneration
@@ -450,8 +463,8 @@ class ScreenCaptureService : Service() {
                     width = streamWidth,
                     height = streamHeight,
                     dpi = dpi,
-                    fps = fps,
-                    bitrate = bitrate,
+                    fps = safeFps,
+                    bitrate = safeBitrate,
                     port = port,
                     isGamingMode = isGamingMode,
                     codecMime = codec
@@ -461,8 +474,8 @@ class ScreenCaptureService : Service() {
                     codec = com.castpro.core.common.model.VideoCodec.fromMime(codec),
                     width = streamWidth,
                     height = streamHeight,
-                    fps = fps,
-                    bitrate = bitrate,
+                    fps = safeFps,
+                    bitrate = safeBitrate,
                     rotationDegrees = currentRotationDegrees,
                     isGamingMode = isGamingMode
                 )

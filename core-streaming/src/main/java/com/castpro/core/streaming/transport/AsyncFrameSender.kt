@@ -1,6 +1,7 @@
 package com.castpro.core.streaming.transport
 
 import android.os.Process
+import android.os.SystemClock
 import com.castpro.core.common.protocol.Constants
 import com.castpro.core.common.protocol.PacketHeader
 import java.util.concurrent.ArrayBlockingQueue
@@ -17,7 +18,8 @@ class AsyncFrameSender(
     private val transport: StreamTransport,
     private val onRequestKeyFrame: () -> Unit,
     private val onStats: (delivered: Boolean, bytes: Int) -> Unit,
-    private val onCodecConfigStats: (delivered: Boolean, bytes: Int) -> Unit = { _, _ -> }
+    private val onCodecConfigStats: (delivered: Boolean, bytes: Int) -> Unit = { _, _ -> },
+    private val clockMs: () -> Long = { SystemClock.elapsedRealtime() }
 ) {
     private data class QueuedPacket(
         val header: PacketHeader,
@@ -26,8 +28,10 @@ class AsyncFrameSender(
         val isCodecConfig: Boolean
     )
 
-    // Two queued frames cap latency growth to roughly 33 ms at 60 fps.
-    private val queue = ArrayBlockingQueue<QueuedPacket>(2)
+    // Four slots absorb brief TCP scheduling jitter without allowing an unbounded backlog.
+    private val queue = ArrayBlockingQueue<QueuedPacket>(4)
+    private val keyFrameCooldownMs = 1000L
+    @Volatile private var lastKeyFrameRequestMs = 0L
     private val running = AtomicBoolean(false)
     private var senderThread: Thread? = null
 
@@ -71,11 +75,19 @@ class AsyncFrameSender(
             val stale = queue.firstOrNull { !it.isProtected }
             if (stale != null && queue.remove(stale)) {
                 reportStats(stale, delivered = false)
-                runCatching { onRequestKeyFrame() }
+                requestKeyFrameIfAllowed()
             }
             if (!queue.offer(packet)) {
                 reportStats(packet, delivered = false)
             }
+        }
+    }
+
+    private fun requestKeyFrameIfAllowed() {
+        val now = clockMs()
+        if (now - lastKeyFrameRequestMs >= keyFrameCooldownMs) {
+            lastKeyFrameRequestMs = now
+            runCatching { onRequestKeyFrame() }
         }
     }
 

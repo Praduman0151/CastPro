@@ -9,6 +9,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Tv
@@ -57,15 +59,29 @@ fun TvReceiverScreen(
     onToggleCompactHud: () -> Unit = {},
     onResetServer: () -> Unit = {}
 ) {
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(Color.Black)
+            .clipToBounds(),
         contentAlignment = Alignment.Center
     ) {
-        // The view is always the full panel. The renderer applies the selected
-        // transform matrix to the decoded frame; STRETCH uses separate X/Y
-        // scales, so the picture can never leave unused black bars.
+        val density = LocalDensity.current
+        val containerW = constraints.maxWidth.toFloat()
+        val containerH = constraints.maxHeight.toFloat()
+        val videoWidth = state.streamConfig.width
+        val videoHeight = state.streamConfig.height
+        val videoAspect = if (videoWidth > 0 && videoHeight > 0) videoWidth.toFloat() / videoHeight.toFloat() else 16f / 9f
+        val containerAspect = if (containerH > 0f) containerW / containerH else 16f / 9f
+        val (targetW, targetH) = when (state.displayMode) {
+            TvDisplayMode.FIT -> if (videoAspect > containerAspect) containerW to (containerW / videoAspect) else (containerH * videoAspect) to containerH
+            TvDisplayMode.FILL -> if (videoAspect > containerAspect) (containerH * videoAspect) to containerH else containerW to (containerW / videoAspect)
+            TvDisplayMode.STRETCH -> containerW to containerH
+        }
+        val videoModifier = Modifier.requiredSize(
+            with(density) { targetW.toDp() },
+            with(density) { targetH.toDp() }
+        )
         if (useSurfaceView) {
             AndroidView(
                 factory = { context ->
@@ -77,7 +93,7 @@ fun TvReceiverScreen(
                         onSurfaceViewCreated(this)
                     }
                 },
-                modifier = Modifier.fillMaxSize()
+                modifier = videoModifier
             )
         } else {
             AndroidView(
@@ -90,7 +106,7 @@ fun TvReceiverScreen(
                         onSurfaceCreated(this)
                     }
                 },
-                modifier = Modifier.fillMaxSize()
+                modifier = videoModifier
             )
         }
 
