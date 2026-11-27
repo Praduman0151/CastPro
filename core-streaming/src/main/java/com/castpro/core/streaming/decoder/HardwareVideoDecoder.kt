@@ -279,8 +279,8 @@ class HardwareVideoDecoder(
         length: Int,
         timestampNano: Long,
         isGamingMode: Boolean,
-        isCodecConfig: Boolean = false,
-        isKeyframe: Boolean = false
+        isCodecConfig: Boolean,
+        isKeyframe: Boolean
     ) {
         synchronized(lock) {
             // Count bytes received from the network, even when decoder backpressure
