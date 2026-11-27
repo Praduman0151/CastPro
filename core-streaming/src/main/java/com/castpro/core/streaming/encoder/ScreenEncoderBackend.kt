@@ -34,15 +34,22 @@ object ScreenEncoderFactory {
         useNativeEncoder: Boolean = false
     ): Pair<ScreenEncoderBackend, Surface> {
         if (useNativeEncoder) {
-            runCatching {
-                val native = NativeScreenEncoder(config, transport, onStats, onError)
-                val surface = native.prepare()
-                native.start()
-                Log.w(TAG, "EXPERIMENTAL opt-in: NativeScreenEncoder selected over TCP")
-                return native to surface
-            }.onFailure {
-                Log.e(TAG, "Opt-in native encoder failed; falling back to hardware", it)
-                onError("Native encoder unavailable; using hardware encoder: ${it.message}")
+            val native = runCatching {
+                NativeScreenEncoder(config, transport, onStats, onError)
+            }.getOrNull()
+            if (native != null) {
+                try {
+                    val surface = native.prepare()
+                    native.start()
+                    Log.w(TAG, "EXPERIMENTAL opt-in: NativeScreenEncoder selected over TCP")
+                    return native to surface
+                } catch (error: Throwable) {
+                    runCatching { native.stop() }
+                    Log.e(TAG, "Opt-in native encoder failed; falling back to hardware", error)
+                    onError("Native encoder unavailable; using hardware encoder: ${error.message}")
+                }
+            } else {
+                onError("Native encoder library unavailable; using hardware encoder")
             }
         }
         Log.i(TAG, "Preparing stable hardware encoder: gaming=${config.isGamingMode} " +
