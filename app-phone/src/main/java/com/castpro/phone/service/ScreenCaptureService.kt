@@ -410,11 +410,9 @@ class ScreenCaptureService : Service() {
                         virtualDisplay = oldDisplay
                     }
                     CastSessionBus.setError(null)
-                    updateNotification("Streaming ${outputWidth}×${outputHeight} @ ${safeFps}FPS • quality updated")
                     CastSessionBus.setAppliedQuality(
                         "${outputWidth}x${outputHeight} · ${fps} fps · ${codec.substringAfterLast('/').uppercase()}"
                     )
-                    appendStatus("applyLiveConfig done")
                     }
                 )
                 if (!installed) {
