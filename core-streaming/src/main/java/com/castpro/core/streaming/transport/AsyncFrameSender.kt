@@ -1,7 +1,6 @@
 package com.castpro.core.streaming.transport
 
 import android.os.Process
-import android.os.SystemClock
 import com.castpro.core.common.protocol.Constants
 import com.castpro.core.common.protocol.PacketHeader
 import java.util.concurrent.ArrayBlockingQueue
@@ -19,7 +18,7 @@ class AsyncFrameSender(
     private val onRequestKeyFrame: () -> Unit,
     private val onStats: (delivered: Boolean, bytes: Int) -> Unit,
     private val onCodecConfigStats: (delivered: Boolean, bytes: Int) -> Unit = { _, _ -> },
-    private val clockMs: () -> Long = { SystemClock.elapsedRealtime() }
+    private val clockMs: () -> Long = { System.nanoTime() / 1_000_000L }
 ) {
     private data class QueuedPacket(
         val header: PacketHeader,
