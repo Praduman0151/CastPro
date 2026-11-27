@@ -105,7 +105,6 @@ class HardwareScreenEncoder(
             setInteger(MediaFormat.KEY_PRIORITY, 0)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 runCatching { setInteger(MediaFormat.KEY_OPERATING_RATE, targetFps) }
-            runCatching { setFloat("max-fps-to-encoder", targetFps.toFloat()) }
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
@@ -131,7 +130,7 @@ class HardwareScreenEncoder(
             setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
             runCatching { setInteger("max-bitrate", config.bitrate.coerceAtMost(12_000_000)) }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                runCatching { setInteger(MediaFormat.KEY_OPERATING_RATE, config.fps.coerceIn(1, 60)) }
+                runCatching { setInteger(MediaFormat.KEY_OPERATING_RATE, targetFps) }
             }
         }
         val vbrCodec = MediaCodec.createEncoderByType(config.codecMime)
@@ -151,6 +150,7 @@ class HardwareScreenEncoder(
             EncoderFormatPolicy.minimalFallbackValues(
                 config.bitrate.coerceAtMost(12_000_000), config.fps.coerceIn(1, 60), Constants.DEFAULT_I_FRAME_INTERVAL
             ).forEach { (key, value) -> setInteger(key, value) }
+            runCatching { setFloat("max-fps-to-encoder", targetFps.toFloat()) }
         }
         val fallbackCodec = MediaCodec.createEncoderByType(config.codecMime)
         try {

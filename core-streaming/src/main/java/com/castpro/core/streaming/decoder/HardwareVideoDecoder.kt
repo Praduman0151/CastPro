@@ -140,6 +140,9 @@ class HardwareVideoDecoder(
         }
         var lastError: Exception? = null
         for (preferredName in candidates) {
+            // Each candidate is a new MediaCodec instance; CSD submitted to a
+            // failed candidate must never suppress priming the next one.
+            lastSubmittedCsd = null
             var codec: MediaCodec? = null
             try {
                 codec = if (preferredName == null) {
@@ -191,6 +194,8 @@ class HardwareVideoDecoder(
             } catch (e: Exception) {
                 lastError = e
                 Log.w(tag, "Decoder ${preferredName ?: "hardware"} rejected the stream", e)
+                if (mediaCodec === codec) mediaCodec = null
+                lastSubmittedCsd = null
                 codec?.let { runCatching { it.release() } }
             }
         }
