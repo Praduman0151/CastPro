@@ -1,25 +1,24 @@
 package com.castpro.core.streaming.encoder
 
-import kotlin.math.max
-import kotlin.math.min
-
 /**
  * Returns a proportional, H.264-aligned size for the phone's current display.
- * The long edge is capped at [maxLongEdge] and the short edge at 1080 pixels.
+ * The long edge is capped at [maxLongEdge] and the short edge at [maxShortEdge].
  */
 fun computeAspectMatchedSize(
     displayW: Int,
     displayH: Int,
-    maxLongEdge: Int = 1920
+    maxLongEdge: Int = 1920,
+    maxShortEdge: Int = 1080
 ): Pair<Int, Int> {
+    val longEdge = maxOf(displayW, displayH).coerceAtLeast(1)
+    val shortEdge = minOf(displayW, displayH).coerceAtLeast(1)
+    val scale = minOf(
+        maxLongEdge.toFloat() / longEdge.toFloat(),
+        maxShortEdge.toFloat() / shortEdge.toFloat(),
+        1f
+    )
     val safeW = displayW.coerceAtLeast(1)
     val safeH = displayH.coerceAtLeast(1)
-    val longEdge = max(safeW, safeH)
-    val shortEdge = min(safeW, safeH)
-    val scale = minOf(
-        (maxLongEdge.coerceAtLeast(320).toFloat() / longEdge.toFloat()).coerceAtMost(1f),
-        (1080f / shortEdge.toFloat()).coerceAtMost(1f)
-    )
     val rawW = (safeW * scale).toInt()
     val rawH = (safeH * scale).toInt()
     val alignedW = (rawW / 16) * 16
