@@ -45,13 +45,24 @@ class DecoderCommandQueue(
             is DecoderCommand.Frame -> {
                 if (frameCapacity <= 0) {
                     droppedFrames++
-                } else {
-                    while (frames.size >= frameCapacity) {
+                    return@withLock false
+                }
+                while (frames.size >= frameCapacity) {
+                    val evictable = frames.firstOrNull { !it.isCodecConfig && !it.isKeyframe }
+                    if (evictable != null) {
+                        frames.remove(evictable)
+                        droppedFrames++
+                    } else if (!command.isCodecConfig && !command.isKeyframe) {
+                        // Never evict queued CSD or keyframes for an overflowing P-frame.
+                        droppedFrames++
+                        notEmpty.signalAll()
+                        return@withLock false
+                    } else {
                         frames.pollFirst()
                         droppedFrames++
                     }
-                    frames.addLast(command)
                 }
+                frames.addLast(command)
             }
             is DecoderCommand.Config -> {
                 // Frames decoded with the previous configuration are stale and

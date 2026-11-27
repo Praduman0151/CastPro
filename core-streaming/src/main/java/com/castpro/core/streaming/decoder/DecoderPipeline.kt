@@ -29,6 +29,10 @@ class DecoderPipeline(
     @Volatile var awaitingKeyframe: Boolean = true
         private set
 
+    /** True once valid codec config (CSD) has been accepted for the active session. */
+    @Volatile var hasCodecConfig: Boolean = false
+        private set
+
     fun start() {
         if (!running.compareAndSet(false, true)) return
         isRunning = true
@@ -62,22 +66,34 @@ class DecoderPipeline(
         when (command) {
             is DecoderCommand.Config -> {
                 awaitingKeyframe = true
+                hasCodecConfig = false
                 sink.reconfigure(command.config)
             }
             DecoderCommand.Reset -> {
                 awaitingKeyframe = true
+                hasCodecConfig = false
                 sink.reset()
             }
             is DecoderCommand.Frame -> {
-                if (awaitingKeyframe && !command.isCodecConfig && !command.isKeyframe) return
+                if (!command.isCodecConfig) {
+                    if (!hasCodecConfig) return
+                    if (awaitingKeyframe && !command.isKeyframe) return
+                }
                 if (!sink.decodeFrame(command)) {
                     // The codec could not accept the frame (no input buffer,
-                    // oversized NAL, decode error). Its reference state is now
-                    // unknown: only a fresh IDR can make P-frames safe again.
+                    // oversized NAL, decode error, or invalid/unqueued CSD).
+                    // Its reference state is now unknown: only valid CSD + a
+                    // fresh IDR can make P-frames safe again.
                     awaitingKeyframe = true
+                    if (command.isCodecConfig) hasCodecConfig = false
                     return
                 }
-                if (!command.isCodecConfig && command.isKeyframe) awaitingKeyframe = false
+                if (command.isCodecConfig) {
+                    hasCodecConfig = true
+                    if (command.isKeyframe) awaitingKeyframe = false
+                } else if (command.isKeyframe) {
+                    awaitingKeyframe = false
+                }
             }
             DecoderCommand.Stop -> Unit
         }

@@ -47,11 +47,47 @@ class DecoderCommandQueueTest {
         assertEquals(1L, (queue.pollNow() as DecoderCommand.Frame).timestampNano)
     }
 
-    private fun frame(timestamp: Long) = DecoderCommand.Frame(
+    @Test
+    fun pFrameOverflowEvictsOldestPFrameInsteadOfCodecConfigOrKeyframe() {
+        val queue = DecoderCommandQueue(frameCapacity = 3)
+        assertTrue(queue.offer(frame(1, isCodecConfig = true)))
+        assertTrue(queue.offer(frame(2, isKeyframe = true)))
+        assertTrue(queue.offer(frame(3)))
+        assertTrue(queue.offer(frame(4)))
+
+        assertEquals(3, queue.size)
+        assertEquals(1L, queue.droppedPackets)
+        assertEquals(1L, (queue.pollNow() as DecoderCommand.Frame).timestampNano)
+        assertEquals(2L, (queue.pollNow() as DecoderCommand.Frame).timestampNano)
+        assertEquals(4L, (queue.pollNow() as DecoderCommand.Frame).timestampNano)
+        assertEquals(null, queue.pollNow())
+    }
+
+    @Test
+    fun pFrameOverflowDropsIncomingPFrameWhenOnlyConfigAndKeyframesAreQueued() {
+        val queue = DecoderCommandQueue(frameCapacity = 2)
+        assertTrue(queue.offer(frame(1, isCodecConfig = true)))
+        assertTrue(queue.offer(frame(2, isKeyframe = true)))
+        org.junit.Assert.assertFalse(queue.offer(frame(3)))
+
+        assertEquals(2, queue.size)
+        assertEquals(1L, queue.droppedPackets)
+        assertEquals(1L, (queue.pollNow() as DecoderCommand.Frame).timestampNano)
+        assertEquals(2L, (queue.pollNow() as DecoderCommand.Frame).timestampNano)
+        assertEquals(null, queue.pollNow())
+    }
+
+    private fun frame(
+        timestamp: Long,
+        isCodecConfig: Boolean = false,
+        isKeyframe: Boolean = false
+    ) = DecoderCommand.Frame(
         data = byteArrayOf(1, 2, 3),
         offset = 0,
         length = 3,
         timestampNano = timestamp,
-        isGamingMode = true
+        isGamingMode = true,
+        isCodecConfig = isCodecConfig,
+        isKeyframe = isKeyframe
     )
 }

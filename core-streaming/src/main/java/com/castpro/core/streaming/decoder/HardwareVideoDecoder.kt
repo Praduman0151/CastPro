@@ -225,26 +225,31 @@ class HardwareVideoDecoder(
 
     private fun queueCodecConfig(codec: MediaCodec, data: ByteArray, offset: Int, length: Int): Boolean {
         if (length <= 0 || offset < 0 || offset > data.size - length) return false
-        val inputIndex = codec.dequeueInputBuffer(10_000)
-        if (inputIndex < 0) {
-            Log.w(tag, "No input buffer available to resubmit codec config")
-            return false
+        return try {
+            val inputIndex = codec.dequeueInputBuffer(10_000)
+            if (inputIndex < 0) {
+                Log.w(tag, "No input buffer available to resubmit codec config")
+                return false
+            }
+            val buffer = codec.getInputBuffer(inputIndex)
+            if (buffer == null || length > buffer.remaining()) {
+                Log.w(tag, "Cannot resubmit codec config: buffer unavailable or too small")
+                codec.queueInputBuffer(inputIndex, 0, 0, System.nanoTime() / 1_000L, 0)
+                return false
+            }
+            buffer.put(data, offset, length)
+            codec.queueInputBuffer(
+                inputIndex,
+                0,
+                length,
+                System.nanoTime() / 1_000L,
+                MediaCodec.BUFFER_FLAG_CODEC_CONFIG
+            )
+            true
+        } catch (e: Throwable) {
+            Log.w(tag, "Failed to queue codec config to MediaCodec", e)
+            false
         }
-        val buffer = codec.getInputBuffer(inputIndex)
-        if (buffer == null || length > buffer.remaining()) {
-            Log.w(tag, "Cannot resubmit codec config: buffer unavailable or too small")
-            codec.queueInputBuffer(inputIndex, 0, 0, System.nanoTime() / 1_000L, 0)
-            return false
-        }
-        buffer.put(data, offset, length)
-        codec.queueInputBuffer(
-            inputIndex,
-            0,
-            length,
-            System.nanoTime() / 1_000L,
-            MediaCodec.BUFFER_FLAG_CODEC_CONFIG
-        )
-        return true
     }
 
     /**
@@ -302,14 +307,17 @@ class HardwareVideoDecoder(
                                 "first16=${AnnexBCodecConfig.hexPrefix(data, offset, length)} " +
                                 "nalTypes=${AnnexBCodecConfig.nalUnitTypes(config.codecMime, data, offset, length)}"
                         )
+                        decodeGate.resetForReconfigure()
                         return false
                     }
                     cachedCodecConfig = parameterSets
                     val queued = queueCodecConfig(codec, parameterSets, 0, parameterSets.size)
-                    if (queued) {
-                        decodeGate.markCodecConfigAvailable()
+                    if (!queued) {
+                        decodeGate.resetForReconfigure()
+                        return false
                     }
-                    return queued
+                    decodeGate.markCodecConfigAvailable()
+                    if (!frame.isKeyframe) return true
                 }
 
                 // Surface recreation may seed this decoder with the session CSD.
