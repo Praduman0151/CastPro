@@ -4,6 +4,10 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class RecoveryPoliciesTest {
+    @Test fun displayChangeDebounceUsesQuarterSecondWindow() {
+        assertEquals(250L, OrientationReconfigurationPolicy.DEBOUNCE_MS)
+    }
+
     @Test fun orientationPolicyDetectsBothPortraitLandscapeTransitionsOnly() {
         assertTrue(OrientationReconfigurationPolicy.shouldReconfigure(864, 1920, 1920, 864))
         assertTrue(OrientationReconfigurationPolicy.shouldReconfigure(1920, 864, 864, 1920))
