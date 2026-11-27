@@ -60,6 +60,26 @@ class VideoDecodeGateTest {
         assertTrue(gateForRecreatedDecoder.canQueueFrame(isKeyframe = true))
     }
 
+    @Test fun recreatedTextureSurfaceRequiresCachedCsdAndFreshIdrBeforePFrames() {
+        val cachedSpsPps = byteArrayOf(
+            0, 0, 0, 1, 0x67, 0x42, 0, 0x1E,
+            0, 0, 1, 0x68, 0xCE.toByte(), 0x06
+        )
+
+        // surfaceDestroyed stops the old decoder; surfaceCreated creates a new
+        // decoder/gate and seeds it from the renderer's session CSD cache.
+        val recreatedGate = VideoDecodeGate()
+        assertFalse(recreatedGate.canQueueFrame(isKeyframe = false))
+        assertNotNull(recreatedGate.extractInlineParameterSets(
+            "video/avc", cachedSpsPps, 0, cachedSpsPps.size
+        ))
+        recreatedGate.markCodecConfigAvailable()
+        assertFalse(recreatedGate.canQueueFrame(isKeyframe = false))
+        assertTrue(recreatedGate.canQueueFrame(isKeyframe = true))
+        recreatedGate.markKeyframeQueued()
+        assertTrue(recreatedGate.canQueueFrame(isKeyframe = false))
+    }
+
     @Test fun disconnectClosesGateAndReconnectRequiresFreshConfigAndIdr() {
         val gate = VideoDecodeGate()
         gate.markCodecConfigAvailable()
